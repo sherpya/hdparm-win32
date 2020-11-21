@@ -2,7 +2,7 @@
  * hdparm.c - Command line interface to get/set hard disk parameters.
  *          - by Mark Lord (C) 1994-2018 -- freely distributable.
  */
-#define HDPARM_VERSION "v9.59"
+#define HDPARM_VERSION "v9.60"
 
 #define _LARGEFILE64_SOURCE /*for lseek64*/
 #define _BSD_SOURCE	/* for strtoll() */
