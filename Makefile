@@ -15,8 +15,6 @@ STRIP ?= strip
 
 CFLAGS := -O2 -W -Wall -Wbad-function-cast -Wcast-align -Wpointer-arith -Wcast-qual -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -fkeep-inline-functions -Wwrite-strings -Waggregate-return -Wnested-externs -Wtrigraphs $(CFLAGS)
 
-LDFLAGS = -s
-#LDFLAGS = -s -static
 INSTALL = install
 INSTALL_DATA = $(INSTALL) -m 644
 INSTALL_DIR = $(INSTALL) -m 755 -d
@@ -27,7 +25,10 @@ OBJS = hdparm.o identify.o sgio.o sysfs.o geom.o fallocate.o fibmap.o fwdownload
 all:
 	$(MAKE) -j4 hdparm
 
-hdparm: hdparm.h sgio.h $(OBJS)
+static:
+	LDFLAGS=-static $(MAKE)
+
+hdparm: Makefile hdparm.h sgio.h $(OBJS)
 	$(CC) $(LDFLAGS) -o hdparm $(OBJS)
 	$(STRIP) hdparm
 

@@ -2,7 +2,7 @@
  * hdparm.c - Command line interface to get/set hard disk parameters.
  *          - by Mark Lord (C) 1994-2018 -- freely distributable.
  */
-#define HDPARM_VERSION "v9.58"
+#define HDPARM_VERSION "v9.59"
 
 #define _LARGEFILE64_SOURCE /*for lseek64*/
 #define _BSD_SOURCE	/* for strtoll() */
@@ -370,6 +370,7 @@ static int time_device (int fd)
 		err = get_dev_geometry(fd, NULL, NULL, NULL, NULL, &nsectors);
 		if (!err)
 			max_iterations = nsectors / (2 * 1024) / TIMING_BUF_MB;
+		err = 0;
 	}
 	buf = prepare_timing_buf(TIMING_BUF_BYTES);
 	if (!buf)
@@ -1074,7 +1075,8 @@ static void get_identify_data (int fd)
 		args[0] = last_identify_op;
 		args[3] = 1;	/* sector count */
 		if (do_drive_cmd(fd, args, 0)) {
-			perror(" HDIO_DRIVE_CMD(identify) failed");
+			if (verbose)
+				perror(" HDIO_DRIVE_CMD(identify) failed");
 			return;
 		}
 	}
@@ -1118,21 +1120,21 @@ int get_log_page_data (int fd, __u8 log_address, __u8 pagenr, __u8 *buf)
 	if (!id)
 		exit(EIO);
 	if ((id[84] && (1<<5)) == 0)
-		return -ENOENT;  /* READ_LOG_EXT not supported */
+		return ENOENT;  /* READ_LOG_EXT not supported */
 	if (!page0) {
 		err = do_read_log(fd, 0, 0, page0_buf);
 		if (err) {
 			fprintf(stderr, "READ_LOG_EXT(0,0) failed: %s\n", strerror(err));
-			return -ENOENT;
+			return ENOENT;
 		}
 		page0 = page0_buf;
 	}
 	if (page0[log_address] <= pagenr)
-		return -ENOENT;
+		return ENOENT;
 	err = do_read_log(fd, log_address, pagenr, buf);
 	if (err) {
 		fprintf(stderr, "READ_LOG_EXT(0x%02x, %u) failed: %s\n", log_address, pagenr, strerror(err));
-		return -ENOENT;
+		return ENOENT;
 	}
 	return 0;
 }
@@ -1194,12 +1196,12 @@ static void dump_sectors (__u16 *w, unsigned int count, int raw, unsigned int se
 
 static int abort_if_not_full_device (int fd, __u64 lba, const char *devname, const char *msg)
 {
-	struct stat stat;
+	struct stat st;
 	__u64 start_lba;
 	int i, err, shortened = 0;
 	char *fdevname = strdup(devname);
 
-	if (0 == fstat(fd, &stat) && S_ISCHR(stat.st_mode))
+	if (0 == fstat(fd, &st) && S_ISCHR(st.st_mode))
 		return 0; /* skip geometry test for character (non-block) devices; eg. /dev/sg* */
 	err = get_dev_geometry(fd, NULL, NULL, NULL, &start_lba, NULL);
 	if (err)
@@ -1634,7 +1636,7 @@ get_set_sector_index (int fd, unsigned int wanted_sector_size, int *checkword)
 
 static int do_set_sector_size_cmd (int fd, const char *devname)
 {
-	int index, err = 0;
+	int idx, err = 0;
 	__u8 ata_op;
 	struct hdio_taskfile *r;
 	int checkword = 0;
@@ -1649,11 +1651,11 @@ static int do_set_sector_size_cmd (int fd, const char *devname)
 	ata_op = ATA_OP_SET_SECTOR_CONFIGURATION;
 	init_hdio_taskfile(r, ata_op, RW_WRITE, LBA48_FORCE, 0, 0, 0);
 
-	index = get_set_sector_index(fd, new_sector_size, &checkword);
+	idx = get_set_sector_index(fd, new_sector_size, &checkword);
 	r->hob.feat  = checkword >> 8;
 	r->lob.feat  = checkword;
 	r->hob.nsect = 0;
-	r->lob.nsect = index;
+	r->lob.nsect = idx;
 	r->oflags.bits.hob.feat = 1;
 
 	printf("changing sector size configuration to %llu: ", new_sector_size);

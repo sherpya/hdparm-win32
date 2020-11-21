@@ -346,10 +346,6 @@ const char actual_ver[MINOR_MAX+2] = {
 #define SUPPORT_48_BIT		0x0400  
 #define NUM_CMD_FEAT_STR	48
 
-static const char unknown[8] = "obsolete";
-//static const char unknown[8] = "unknown";
-#define unknown "unknown-"
-
 static const char *feat_word69_str[16] = { 
 	"CFast specification support",			/* word 69 bit 15 */
 	"Deterministic read data after TRIM",		/* word 69 bit 14 */
@@ -359,12 +355,12 @@ static const char *feat_word69_str[16] = {
 	"WRITE BUFFER DMA command",			/* word 69 bit 10 */
 	"SET MAX SETPASSWORD/UNLOCK DMA commands",	/* word 69 bit  9 */
 	"DOWNLOAD MICROCODE DMA command",		/* word 69 bit  8 */
-	"reserved 69[7]",				/* word 69 bit  7 */
-	"reserved 69[6]",				/* word 69 bit  6 */
-	"Deterministic read ZEROs after TRIM",		/* word 69 bit  5 */
-	"reserved 69[4]",				/* word 69 bit  4 */
-	"reserved 69[3]",				/* word 69 bit  3 */
-	"reserved 69[2]",				/* word 69 bit  2 */
+	"IEEE 1667 authentication of transient storage devices",	/* word 69 bit  7 */
+	"Optional ATA device 28-bit commands",			/* word 69 bit  6 */
+	"Deterministic read ZEROs after TRIM",			/* word 69 bit  5 */
+	"Device encrypts all user data",				/* word 69 bit  4 */
+	"Extended number of user addressable sectors ",	/* word 69 bit  3 */
+	"All write cache is non-volatile",				/* word 69 bit  2 */
 	"reserved 69[1]",				/* word 69 bit  1 */
 	"reserved 69[0]",				/* word 69 bit  0 */
 };
