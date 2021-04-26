@@ -685,14 +685,33 @@ static void print_devslp_info (int fd, __u16 *id)
 }
 
 static void
-print_logical_sector_sizes (int fd)
+print_logical_sector_sizes (int fd, unsigned int current_lss)
 {
 	__u8 d[512] = {0,};
-	int i, found = 0, rc;
+	int i, found = 0, rc, found_byte_lss = 0, found_word_lss = 0, lss_is_bytes = 0;
 
 	rc = get_log_page_data(fd, 0x2f, 0, d);
 	if (rc)
 		return;
+	/*
+	 * Some devices incorrectly return logical sector size (lss) as bytes.
+	 * Scan log entries and if the current lss is in the log, and there isn't an equivalent
+	 * entry in words, assume the device is returning the logical sector size in bytes.
+	 * Doing this takes two passes through the log data.
+	 */
+	for (i = 0; i < 128; i += 16) {
+		unsigned int lss;
+		if ((d[i] & 0x80) == 0)  /* Is this descriptor valid? */
+			continue;  /* not valid */
+		lss = d[i + 4] | (d[i + 5] << 8) | (d[i + 6] << 16) | (d[i + 7] << 24);  /* logical sector size */
+		if (lss == current_lss) {
+			found_byte_lss = 1;  /* found lss in bytes */
+		} else if ((lss * 2) == current_lss) {
+			found_word_lss = 1;  /* found lss in words */
+			break;
+		}
+	}
+	lss_is_bytes = !found_word_lss && found_byte_lss;
 	for (i = 0; i < 128; i += 16) {
 		unsigned int lss;
 		if ((d[i] & 0x80) == 0)  /* Is this descriptor valid? */
@@ -700,6 +719,7 @@ print_logical_sector_sizes (int fd)
 		if (!found++)
 			printf(" [ Supported:");
 		lss = d[i + 4] | (d[i + 5] << 8) | (d[i + 6] << 16) | (d[i + 7] << 24);  /* logical sector size */
+		lss = lss_is_bytes ? lss : (lss * 2);
 		printf(" %u", lss);
 	}
 	if (found)
@@ -993,7 +1013,7 @@ void identify (int fd, __u16 *id_supplied)
 				lsize = (val[118] << 16) | val[117];
 			sector_bytes = 2 * lsize;
 			printf("\t%-31s %11u bytes","Logical  Sector size:", sector_bytes);
-			print_logical_sector_sizes(fd);
+			print_logical_sector_sizes(fd, sector_bytes);
 			printf("\n");
 			printf("\t%-31s %11u bytes\n","Physical Sector size:", sector_bytes * pfactor);
 			if ((val[209] & 0xc000) == 0x4000) {
@@ -1216,8 +1236,10 @@ void identify (int fd, __u16 *id_supplied)
 
 	/* Programmed IO stuff */
 	printf("\tPIO: ");
-        /* If a drive supports mode n (e.g. 3), it also supports all modes less
-	 * than n (e.g. 3, 2, 1 and 0).  Print all the modes. */
+	/*
+	 * If a drive supports mode n (e.g. 3), it also supports all modes less
+	 * than n (e.g. 3, 2, 1 and 0).  Print all the modes.
+	 */
 	if((val[WHATS_VALID] & OK_W64_70) && (val[ADV_PIO_MODES] & PIO_SUP)) {
 		jj = ((val[ADV_PIO_MODES] & PIO_SUP) << 3) | 0x0007;
 		for (ii = 0; ii <= PIO_MODE_MAX ; ii++) {

@@ -2,7 +2,7 @@
  * hdparm.c - Command line interface to get/set hard disk parameters.
  *          - by Mark Lord (C) 1994-2018 -- freely distributable.
  */
-#define HDPARM_VERSION "v9.60"
+#define HDPARM_VERSION "v9.61"
 
 #define _LARGEFILE64_SOURCE /*for lseek64*/
 #define _BSD_SOURCE	/* for strtoll() */
@@ -507,7 +507,7 @@ static void dump_identity (__u16 *idw)
 	printf(" CurCHS=%u/%u/%u, CurSects=%u", idw[54], idw[55], idw[56], idw[57] | (idw[58] << 16));
 	printf(", LBA=%s", YN(idw[49] & 0x200));
 	if (idw[49] & 0x200)
- 		printf(", LBAsects=%llu", get_lba_capacity(idw));
+		printf(", LBAsects=%llu", get_lba_capacity(idw));
 
 	if (idw[49] & 0x100) {
 		if (idw[62] | idw[63]) {
@@ -1613,18 +1613,40 @@ get_set_sector_index (int fd, unsigned int wanted_sector_size, int *checkword)
 {
 	__u8 d[512] = {0,};
 	const int SECTOR_CONFIG = 0x2f;
-	int i, rc;
+	int i, rc, found_byte_lss = 0, found_word_lss = 0, lss_is_bytes = 0;
+	unsigned int current_lss;
 
 	rc = get_log_page_data(fd, SECTOR_CONFIG, 0, d);
 	if (rc) {
 		fprintf(stderr, "READ_LOG_EXT(SECTOR_CONFIGURATION) failed: %s\n", strerror(rc));
 		exit(1);
 	}
+	/*
+	 * Some devices incorrectly return logical sector size (lss) as bytes.
+	 * Scan log entries and if the current lss is in the log, and there isn't an equivalent
+	 * entry in words, assume the device is returning the logical sector size in bytes.
+	 * Doing this takes two passes through the log data.
+	 */
+	current_lss = (unsigned int)get_current_sector_size(fd);
 	for (i = 0; i < 128; i += 16) {
 		unsigned int lss;
 		if ((d[i] & 0x80) == 0)  /* Is this descriptor valid? */
 			continue;  /* not valid */
 		lss = d[i + 4] | (d[i + 5] << 8) | (d[i + 6] << 16) | (d[i + 7] << 24);  /* logical sector size */
+		if (lss == current_lss) {
+			found_byte_lss = 1;  /* found lss in bytes */
+		} else if ((lss * 2) == current_lss) {
+			found_word_lss = 1;  /* found lss in words */
+			break;
+		}
+	}
+	lss_is_bytes = !found_word_lss && found_byte_lss;
+	for (i = 0; i < 128; i += 16) {
+		unsigned int lss;
+		if ((d[i] & 0x80) == 0)  /* Is this descriptor valid? */
+			continue;  /* not valid */
+		lss = d[i + 4] | (d[i + 5] << 8) | (d[i + 6] << 16) | (d[i + 7] << 24);  /* logical sector size */
+		lss = lss_is_bytes ? lss : lss * 2;
 		if (lss == wanted_sector_size) {
 			*checkword = d[i + 2] | (d[i + 3] << 8);
 			return i / 16;  /* descriptor index */
@@ -1936,7 +1958,7 @@ static void usage_help (int clue, int rc)
 	" --fwdownload-modee-max  Download firmware using mode E (max-size segments) (EXTREMELY DANGEROUS)\n"
 	" --idle-immediate  Idle drive immediately\n"
 	" --idle-unload     Idle immediately and unload heads\n"
-  " --Iraw filename   Write raw binary identify data to the specfied file\n"
+	" --Iraw filename   Write raw binary identify data to the specfied file\n"
 	" --Istdin          Read identify data from stdin as ASCII hex\n"
 	" --Istdout         Write identify data to stdout as ASCII hex\n"
 	" --make-bad-sector Deliberately corrupt a sector directly on the media (VERY DANGEROUS)\n"
@@ -2537,18 +2559,18 @@ void process_dev (char *devname)
 					break;
 				default:printf("\?\?\?)\n");
 			}
-               } else if (get_io32bit) {
-                       err = errno;
-                       perror(" HDIO_GET_32BIT failed");
+		} else if (get_io32bit) {
+			err = errno;
+			perror(" HDIO_GET_32BIT failed");
 		}
 	}
 	if (do_defaults || get_unmask) {
 		if (0 == ioctl(fd, HDIO_GET_UNMASKINTR, &parm)) {
 			printf(" unmaskirq     = %2ld", parm);
 			on_off(parm);
-               } else if (get_unmask) {
-                       err = errno;
-                       perror(" HDIO_GET_UNMASKINTR failed");
+		} else if (get_unmask) {
+			err = errno;
+			perror(" HDIO_GET_UNMASKINTR failed");
 		}
 	}
 
@@ -2559,9 +2581,9 @@ void process_dev (char *devname)
 				printf(" (DMA-Assisted-PIO)\n");
 			else
 				on_off(parm);
-                } else if (get_dma) {
-                       err = errno;
-                       perror(" HDIO_GET_DMA failed");
+		} else if (get_dma) {
+			err = errno;
+			perror(" HDIO_GET_DMA failed");
 		}
 	}
 	if (get_dma_q) {
@@ -2575,7 +2597,7 @@ void process_dev (char *devname)
 			on_off(parm);
 		} else if (get_keep) {
 			err = errno;
-                        perror(" HDIO_GET_KEEPSETTINGS failed");
+			perror(" HDIO_GET_KEEPSETTINGS failed");
 		}
 	}
 	if (get_nowerr) {
@@ -2686,7 +2708,7 @@ void process_dev (char *devname)
 					fprintf(stderr, "Wrote IDENTIFY DEVICE data to \"%s\"\n", raw_identify_path);
 					close(rfd);
 				}
-      			} else {
+			} else {
 				identify(fd, (void *)id);
 			}
 		}
