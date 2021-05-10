@@ -2,7 +2,7 @@
  * hdparm.c - Command line interface to get/set hard disk parameters.
  *          - by Mark Lord (C) 1994-2018 -- freely distributable.
  */
-#define HDPARM_VERSION "v9.61"
+#define HDPARM_VERSION "v9.62"
 
 #define _LARGEFILE64_SOURCE /*for lseek64*/
 #define _BSD_SOURCE	/* for strtoll() */
@@ -1352,8 +1352,8 @@ static __u64 do_get_native_max_sectors (int fd)
 			if (verbose)
 				printf("GET_NATIVE_MAX_ADDRESS_EXT response: hob={%02x %02x %02x} lob={%02x %02x %02x}\n",
 					   r.hob.lbah, r.hob.lbam, r.hob.lbal, r.lob.lbah, r.lob.lbam, r.lob.lbal);
-			max = (((__u64)((r.hob.lbah << 16) | (r.hob.lbam << 8) | r.hob.lbal) << 24)
-				   | ((r.lob.lbah << 16) | (r.lob.lbam << 8) | r.lob.lbal)) + 1;
+			max = (((__u64)((r.hob.lbah << 16) | ((__u64)(r.hob.lbam << 8) | r.hob.lbal)) << 24)
+				   | (__u64)((r.lob.lbah << 16) | (r.lob.lbam << 8) | r.lob.lbal)) + 1;
 		}
 	} else { // ACS2 or below, or optional AMAX not present
 		if (SUPPORTS_48BIT_ADDR(id)) {
@@ -1371,7 +1371,7 @@ static __u64 do_get_native_max_sectors (int fd)
 					printf("READ_NATIVE_MAX_ADDRESS_EXT response: hob={%02x %02x %02x} lob={%02x %02x %02x}\n",
 						r.hob.lbah, r.hob.lbam, r.hob.lbal, r.lob.lbah, r.lob.lbam, r.lob.lbal);
 				max = (((__u64)((r.hob.lbah << 16) | (r.hob.lbam << 8) | r.hob.lbal) << 24)
-				     	| ((r.lob.lbah << 16) | (r.lob.lbam << 8) | r.lob.lbal)) + 1;
+				     	| ((__u64)(r.lob.lbah << 16) | (r.lob.lbam << 8) | r.lob.lbal)) + 1;
 			}
 		} else {
 			/* DEVICE (3:0) / LBA (27:24) "remap" does NOT apply in ATA Status Return */
@@ -1556,7 +1556,7 @@ static void do_trim_sector_ranges (int fd, const char *devname, int nranges, str
 	for (i = 0; i < nranges; ++i) {
 		nsectors += sr->nsectors;
 		range = sr->nsectors;
-		range = (range << 48) | sr->lba;
+		range = (__u64)(range << 48) | sr->lba;
 		data[i] = __cpu_to_le64(range);
 		++sr;
 	}
@@ -1742,7 +1742,7 @@ do_trim_from_stdin (int fd, const char *devname)
 			err = errno;
 			fprintf(stderr, "stdin: error at lba:count pair #%d: %s\n", (total_ranges + 1), strerror(err));
 		} else {
-			range = (nsect << 48) | lba;
+			range = (__u64)(nsect << 48) | lba;
 			nsectors += nsect;
 			data[nranges++] = __cpu_to_le64(range);
 			if (nranges == max_ranges) {
@@ -2807,7 +2807,7 @@ void process_dev (char *devname)
 					__u16 *dco = get_dco_identify_data(fd, 1);
 					if (dco) {
 						__u64 dco_max = dco[5];
-						dco_max = ((((__u64)dco[5]) << 32) | (dco[4] << 16) | dco[3]) + 1;
+						dco_max = ((((__u64)dco[5]) << 32) | ((__u64)dco[4] << 16) | (__u64)dco[3]) + 1;
 						printf("(%llu?)", dco_max);
 					}
 					printf(", HPA setting seems invalid");

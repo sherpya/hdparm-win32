@@ -1531,7 +1531,7 @@ void dco_identify_print (__u16 *dco)
 	else if (dco[2] & (1<<0)) printf(" udma0");
 	putchar('\n');
 
-	lba = ((((__u64)dco[5]) << 32) | (dco[4] << 16) | dco[3]) + 1;
+	lba = ((((__u64)dco[5]) << 32) | ((__u64)dco[4] << 16) | (__u64)dco[3]) + 1;
 	printf("\tReal max sectors: %llu\n", lba);
 
 	printf("\tATA command/feature sets:");
