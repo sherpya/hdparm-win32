@@ -1,8 +1,9 @@
 Begin4
 Title:		hdparm
-Version:	9.64
-Entered-date:	2022-07-08
+Version:	9.65
+Entered-date:	2022-09-06
 Description:	hdparm - get/set hard disk parameters for Linux SATA/IDE drives.
+		v9.65 Don't try to read log pages with --Istdin
 		v9.64 Fix truncated output bug with --Istdin
 		v9.63 new --sanitize-overwrite-passes flag, courtesy Michal Grzedzicki
 		v9.62 work around unexpected sign-extending of left-shifted unsigned values by gcc
@@ -138,7 +139,7 @@ Author:		mlord@pobox.com (Mark Lord)
 Maintained-by:	mlord@pobox.com (Mark Lord)
 Primary-site:	http://sourceforge.net/projects/hdparm/
 Alternate-site:	http://www.ibiblio.org/pub/Linux/system/hardware
-		140K hdparm-9.64.tar.gz
+		140K hdparm-9.65.tar.gz
 		7K hdparm.lsm
 Platforms:	Linux
 Copying-policy:	BSD License
