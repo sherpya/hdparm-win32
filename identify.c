@@ -1,11 +1,15 @@
 /* identify.c - by Mark Lord (C) 2000-2007 -- freely distributable */
 
+#ifdef _WIN32
+#include "win32/compat.h"
+#else
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
 #include <linux/types.h>
 #include <endian.h>
+#endif
 
 #if __BYTE_ORDER == __BIG_ENDIAN
 #define __USE_XOPEN

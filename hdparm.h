@@ -1,6 +1,11 @@
 /* Some prototypes for extern functions. */
 
 //#undef __KERNEL_STRICT_NAMES
+#ifndef HDPARM_H
+#define HDPARM_H
+#ifdef _WIN32
+#include "win32/compat.h"
+#endif
 #include <sys/types.h>
 
 #if !defined(__GNUC__) && !defined(__attribute__)
@@ -98,10 +103,12 @@ enum {	/* ioctl() numbers */
  * The only real workaround here is to define it locally,
  * instead of using the system def from <linux/fs.h>
  */
+#ifndef _WIN32
 #ifdef BLKGETSIZE64
 #undef BLKGETSIZE64
 #endif
 #define BLKGETSIZE64 _IOR(0x12,114,__u64)
+#endif
 
 
 /*
@@ -159,3 +166,5 @@ enum {
 	SANITIZE_ERR_ANTIFREEZE_LOCK,
 	SANITIZE_ERR_NUMBER
 };
+
+#endif /* HDPARM_H */

@@ -1,6 +1,12 @@
 /* prototypes and stuff for ATA command ioctls */
 
+#ifndef HDPARM_SGIO_H
+#define HDPARM_SGIO_H
+#ifdef _WIN32
+#include "win32/compat.h"
+#else
 #include <linux/types.h>
+#endif
 
 enum {
 	ATA_OP_DSM			= 0x06, // Data Set Management (TRIM)
@@ -119,6 +125,9 @@ enum {
 	TASKFILE_DPHASE_PIO_OUT	= 4,	/* ide: TASKFILE_OUT */
 };
 
+#ifdef _MSC_VER
+#pragma pack(push, 1)
+#endif
 union reg_flags {
 	unsigned all				:16;
 	struct {
@@ -149,7 +158,14 @@ union reg_flags {
 		} hob;
 	};
 	} bits;
-} __attribute__((packed));
+}
+#ifdef __GNUC__
+__attribute__((packed))
+#endif
+;
+#ifdef _MSC_VER
+#pragma pack(pop)
+#endif
 
 struct taskfile_regs {
 	__u8	data;
@@ -241,3 +257,5 @@ void init_hdio_taskfile (struct hdio_taskfile *r, __u8 ata_op, int rw, int force
 /* APT */
 int apt_sg16(int fd, int rw, int dma, struct ata_tf *tf,
 		void *data, unsigned int data_bytes, unsigned int timeout_secs);
+
+#endif /* HDPARM_SGIO_H */

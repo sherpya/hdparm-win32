@@ -2,7 +2,8 @@
 
 ## Building
 
-The current sources require Linux, a C compiler, and CMake 3.16 or newer.
+The sources support Linux and Windows, with a C compiler and CMake 3.16 or newer.
+See [Windows builds and testing](README.windows.md) for MinGW and Visual Studio.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

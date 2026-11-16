@@ -6,6 +6,9 @@
  * (your choice) the GNU General Public License version 2,
  * or a BSD style license.
  */
+#ifdef _WIN32
+#include "win32/compat.h"
+#else
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
@@ -17,6 +20,7 @@
 #include <linux/types.h>
 #include <linux/fs.h>
 #include <sys/mman.h>
+#endif
 
 #include "hdparm.h"
 #include "sgio.h"
@@ -90,14 +94,19 @@ int fwdownload (int fd, __u16 *id, const char *fwpath, int xfer_mode)
 {
 	int fwfd, err = 0;
 	struct stat st;
-	const char *fw = NULL;
+	char *fw = NULL;
 	const int max_bytes = 0xffff * 512;
 	int xfer_min = 1, xfer_max = 0xffff, xfer_size;
 	ssize_t offset;
 
-	if ((fwfd = open(fwpath, O_RDONLY)) == -1 || fstat(fwfd, &st) == -1) {
+	if ((fwfd = open(fwpath, O_RDONLY
+#ifdef _WIN32
+		|O_BINARY
+#endif
+	)) == -1 || fstat(fwfd, &st) == -1) {
 		err = errno;
 		perror(fwpath);
+		if (fwfd != -1) close(fwfd);
 		return err;
 	}
 
@@ -228,7 +237,10 @@ int fwdownload (int fd, __u16 *id, const char *fwpath, int xfer_mode)
 	if (!err)
 		printf(" Done.\n");
 done:
-	munlock(fw, st.st_size);
+	if (fw && fw != MAP_FAILED) {
+		munlock(fw, st.st_size);
+		munmap(fw, st.st_size);
+	}
 	close (fwfd);
 	return err;
 }

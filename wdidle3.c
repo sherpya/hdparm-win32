@@ -1,3 +1,6 @@
+#ifdef _WIN32
+#include "win32/compat.h"
+#else
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
@@ -7,6 +10,7 @@
 #include <sys/syscall.h>
 #include <linux/types.h>
 #include <linux/fs.h>
+#endif
 
 #include "sgio.h"
 #include "hdparm.h"

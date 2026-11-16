@@ -4,6 +4,9 @@
  */
 #define HDPARM_VERSION "v9.65"
 
+#ifdef _WIN32
+#include "win32/compat.h"
+#else
 #define _LARGEFILE64_SOURCE /*for lseek64*/
 #define _BSD_SOURCE	/* for strtoll() */
 #include <unistd.h>
@@ -31,6 +34,7 @@
 #include <linux/major.h>
 #include <endian.h>
 #include <asm/byteorder.h>
+#endif
 
 #include "hdparm.h"
 #include "sgio.h"
@@ -233,6 +237,10 @@ static void flush_buffer_cache (int fd)
 	sync();
 }
 
+#ifdef _WIN32
+static void time_cache(int fd) { if (win_benchmark(fd, 1, 0)) exit(errno); }
+static int time_device(int fd) { return win_benchmark(fd, 0, timings_offset) ? errno : 0; }
+#else
 static int seek_to_zero (int fd)
 {
 	if (lseek(fd, (off_t) 0, SEEK_SET)) {
@@ -424,6 +432,8 @@ quit:
 		munmap(buf, TIMING_BUF_BYTES);
 	return err;
 }
+
+#endif
 
 static void dmpstr (const char *prefix, unsigned int i, const char *s[], unsigned int maxi)
 {
@@ -1211,6 +1221,12 @@ static int abort_if_not_full_device (int fd, __u64 lba, const char *devname, con
 	int i, err, shortened = 0;
 	char *fdevname = strdup(devname);
 
+	#ifdef _WIN32
+	if (!win_is_whole_disk(fd)) {
+		fprintf(stderr, "%s: this command requires a physical disk, not a volume.\n", devname);
+		exit(EINVAL);
+	}
+#endif
 	if (0 == fstat(fd, &st) && S_ISCHR(st.st_mode))
 		return 0; /* skip geometry test for character (non-block) devices; eg. /dev/sg* */
 	err = get_dev_geometry(fd, NULL, NULL, NULL, &start_lba, NULL);
@@ -1956,7 +1972,13 @@ static void usage_help (int clue, int rc)
 	" --dco-identify    Read/dump device configuration identify data\n"
 	" --dco-restore     Reset device configuration back to factory defaults\n"
 	" --dco-setmax      Use DCO to set maximum addressable sectors\n"
-	" --direct          Use O_DIRECT to bypass page cache for timings\n"
+	#ifdef _WIN32
+    " --list            List Windows device names and transports\n"
+    " --direct          Device reads already use unbuffered I/O on Windows NT\n"
+    "                   -T measures application RAM cached reads on Windows\n"
+#else
+    " --direct          Use O_DIRECT to bypass page cache for timings\n"
+#endif
 	" --drq-hsm-error   Crash system with a \"stuck DRQ\" error (VERY DANGEROUS)\n"
 	" --fallocate       Create a file without writing data to disk\n"
 	" --fibmap          Show device extents (and fragmentation) for a file\n"
@@ -2033,7 +2055,11 @@ void process_dev (char *devname)
 	static long parm, multcount;
 
 	id = NULL;
+	#ifdef _WIN32
+	fd = win_open_device(devname, open_flags);
+#else
 	fd = open(devname, open_flags);
+#endif
 	if (fd < 0) {
 		err = errno;
 		perror(devname);
@@ -2701,7 +2727,11 @@ void process_dev (char *devname)
 				dump_sectors(id, 1, 1, 512);
 			} else if (do_IDentity == 3) {
 				/* Write raw binary IDENTIFY DEVICE data to the specified file */
-				int rfd = open(raw_identify_path, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+				int rfd = open(raw_identify_path, O_WRONLY|O_TRUNC|O_CREAT
+#ifdef _WIN32
+				|O_BINARY
+#endif
+				, 0644);
 				if (rfd == -1) {
 					err = errno;
 					perror(raw_identify_path);
@@ -3260,6 +3290,9 @@ get_longarg (void)
 
 	while (*argp)
 		++argp;
+	#ifdef _WIN32
+	if (0 == strcasecmp(name, "list")) exit(win_list());
+#endif
 	if (0 == strcasecmp(name, "verbose")) {
 		verbose = 1;
 		--num_flags_processed;	/* doesn't count as an action flag */

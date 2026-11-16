@@ -1,4 +1,7 @@
 /* sgio.c - by Mark Lord (C) 2007 -- freely distributable */
+#ifdef _WIN32
+#include "win32/compat.h"
+#else
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -16,11 +19,18 @@
 #include "hdparm.h"
 
 #include <linux/hdreg.h>
+#endif
+#ifdef _WIN32
+#include "sgio.h"
+#include "hdparm.h"
+#endif
 
 extern int verbose;
 extern int prefer_ata12;
 
+#ifndef _WIN32
 static const unsigned int default_timeout_secs = 15;
+#endif
 
 /*
  * Taskfile layout for SG_ATA_16 cdb:
@@ -162,6 +172,10 @@ __u64 tf_to_lba (struct ata_tf *tf)
 	return lba64;
 }
 
+#ifdef _WIN32
+int sg16(int fd, int rw, int dma, struct ata_tf *tf, void *data, unsigned bytes, unsigned timeout)
+{ return win_ata(fd, rw, dma, tf, data, bytes, timeout); }
+#else
 enum {
 	SG_CDB2_TLEN_NODATA	= 0 << 0,
 	SG_CDB2_TLEN_FEAT	= 1 << 0,
@@ -363,6 +377,7 @@ int sg16 (int fd, int rw, int dma, struct ata_tf *tf,
 	return 0;
 }
 
+#endif
 #endif /* SG_IO */
 
 int do_drive_cmd (int fd, unsigned char *args, unsigned int timeout_secs)
@@ -400,10 +415,12 @@ int do_drive_cmd (int fd, unsigned char *args, unsigned int timeout_secs)
 	}
 
 	rc = sg16(fd, SG_READ, is_dma(tf.command), &tf, data, data_bytes, timeout_secs);
+#ifndef _WIN32
 	if (rc == -1) {
 		if (errno == EINVAL || errno == ENODEV || errno == EBADE)
 			goto use_legacy_ioctl;
 	}
+#endif
 
 	if (rc == 0 || errno == EIO) {
 		args[0] = tf.status;
@@ -484,10 +501,12 @@ int do_taskfile_cmd (int fd, struct hdio_taskfile *r, unsigned int timeout_secs)
 	}
 
 	rc = sg16(fd, rw, is_dma(tf.command), &tf, data, data_bytes, timeout_secs);
+#ifndef _WIN32
 	if (rc == -1) {
 		if (errno == EINVAL || errno == ENODEV || errno == EBADE)
 			goto use_legacy_ioctl;
 	}
+#endif
 
 	if (rc == 0 || errno == EIO) {
 		if (r->iflags.bits.lob.feat)	r->lob.feat  = tf.error;
@@ -505,10 +524,13 @@ int do_taskfile_cmd (int fd, struct hdio_taskfile *r, unsigned int timeout_secs)
 	}
 	return rc;
 
+#ifndef _WIN32
 use_legacy_ioctl:
+#endif
 #else
 	timeout_secs = 0;	/* keep compiler happy */
 #endif /* SG_IO */
+#ifndef _WIN32
 	if (verbose)
 		fprintf(stderr, "trying legacy HDIO_DRIVE_TASKFILE\n");
 	errno = 0;
@@ -537,6 +559,7 @@ use_legacy_ioctl:
 		errno = EINVAL;
 	}
 	return rc;
+#endif
 }
 
 void init_hdio_taskfile (struct hdio_taskfile *r, __u8 ata_op, int rw, int force_lba48,
