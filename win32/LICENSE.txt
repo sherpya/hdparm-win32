@@ -1,6 +1,7 @@
 Copyright (c) 2026 Gianluigi Tiesi <sherpya@gmail.com>
 
-The new files in win32/, tests/windows.c and tools/check_pe.py are licensed
+The new files in win32/, tests/windows.c, tests/win9x.c, tools/check_pe.py,
+tools/check_vxd.py and win9x/protocol.h are licensed
 under the BSD 2-Clause License:
 
 Redistribution and use in source and binary forms, with or without

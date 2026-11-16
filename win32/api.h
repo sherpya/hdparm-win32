@@ -13,6 +13,7 @@ struct win_api {
     BOOL(WINAPI *frequency)(LARGE_INTEGER *);
     DWORD(WINAPI *ticks)(void);
     DWORD(WINAPI *version)(void);
+    void(WINAPI *sleep)(DWORD);
 };
 extern struct win_api win_api;
 #ifndef HDPARM_WIN_NO_HOOKS
@@ -26,5 +27,6 @@ extern struct win_api win_api;
 #define QueryPerformanceFrequency win_api.frequency
 #define GetTickCount win_api.ticks
 #define GetVersion win_api.version
+#define Sleep win_api.sleep
 #endif
 #endif

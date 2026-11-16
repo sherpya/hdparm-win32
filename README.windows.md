@@ -108,3 +108,107 @@ The local hdparm 6.9 Win32 port and smartmontools RELEASE_5_40 were interface
 references. New transport code does not reuse the old HANDLE-to-int casts,
 32-bit seek or global device state. Volume mapping follows
 [dd-backdoor](http://www.chrysocome.net/dd-backdoor).
+
+## Windows 98/98SE/ME
+
+The executable selects Win9x transports at runtime. Their device namespaces
+are deliberately independent:
+
+| Name from `--list` | Implemented functionality | Limit |
+| --- | --- | --- |
+| `smart:0` … `smart:3`, `/dev/hda` … `/dev/hdd` | SMARTVSD IDENTIFY, SMART read data/thresholds/status | No sector reads or arbitrary ATA; driver must already be installed/loaded |
+| `aspi:adapter:target:lun` | ASPI SCSI, READ(10/16), capacity, SAT12/16 | Installed system WNASPI32.DLL required; SAT depends on the target's sense support |
+| `ios:index` | IOS enumeration, geometry, sector reads, ATA28 PIO/non-data | Optional HDPARM.VXD and an IOS controller driver that implements the requested operation |
+
+`/dev/sda` and `PhysicalDriveN` have no automatic Win9x mapping. Do not substitute
+an ASPI index or a BIOS number for an IOS index. `--list` prints IOS vendor,
+product, revision, port, bus, native unit and sector size to help identify the
+device. Recheck the model with `-I`. Device-generation changes invalidate open
+IOS contexts, so reopen after changing hardware.
+
+SMARTVSD is used only for its documented command subset. It is not a generic
+ATA transport. The ASPI manager is loaded from the Windows system directory.
+ASPI is compiled only into the x86 path; the x64 executable cannot run on Win9x.
+No DLL, Win16 thunk, or replacement controller driver is bundled.
+
+### Building and loading HDPARM.VXD
+
+Install Clang, NASM, LLD (`lld-link`) and Python 3 on the Linux build host:
+
+```sh
+cmake -S . -B build-vxd -G Ninja -DHDPARM_BUILD_VXD=ON
+cmake --build build-vxd --target hdparm_vxd
+python3 tools/check_vxd.py build-vxd/vxd/HDPARM.VXD
+```
+
+Use `HDPARM_VXD_CLANG`, `HDPARM_VXD_NASM` and `HDPARM_VXD_LLD` to select explicit
+executables. The build tested here uses Clang/LLD 19.1.7, NASM 3.01 and
+Python 3.14. The LLD executable was extracted from Debian's package locally;
+it was not installed into the system. The VxD uses an i386 instruction baseline,
+no C runtime, no PE imports, no controller I/O ports, and a single preloaded
+LE code/data object. PE-to-LE tools and adapted DDB glue retain WINSIMD's GPLv3
+license and provenance; see [win9x/SOURCES.md](win9x/SOURCES.md).
+
+Copy `build-vxd/vxd/HDPARM.VXD` beside the **x86** `hdparm.exe` on Windows 9x.
+Opening `ios:index` or running `--list` opens an already loaded `HDPARM` VxD or
+loads that exact adjacent file dynamically. No SYSTEM.INI edit is needed.
+SMARTVSD and ASPI continue to work when the optional helper is absent.
+The helper unregisters from IOS when unloaded. Unload is refused while I/O
+is pending; request memory and data remain owned by the driver, even when the
+client closes or times out. Completed orphan requests are reclaimed on a later
+call or unload. The protocol is versioned, uses fixed-size fields and no user
+buffer pointers, and serializes outstanding IOS requests.
+
+The IOS ATA transport advertises **28-bit only**, with PIO or non-data commands,
+up to the controller's transfer limit (at most 64 KiB). Extended ATA commands
+and DMA taskfiles are rejected. Sector reads use IOS's 64-bit starting sector;
+capacity and controller limits still govern what the installed port can read.
+`-t` requests IOS DONT_CACHE or ASPI READ commands. Neither promises to bypass
+the device's own cache. `-T` retains the same application RAM-copy semantics.
+
+For ASPI, timeout reporting is followed by draining the outstanding request
+before returning failure: the ASPI manager must finish using its SRB and data.
+A stuck manager can therefore keep the process waiting. No automatic command
+replay or forced release of its buffers occurs.
+
+### Verification status and Win9x checklist
+
+HDPARM.VXD is **experimental until tested in the real Win9x IOS stack**. The
+local checks validate the build, binary format and logic with mocked services;
+they do not establish controller compatibility or successful VMM loading.
+
+| Check | Local result | Still required on Windows |
+| --- | --- | --- |
+| Linux regression | Build and `-V` pass | — |
+| MinGW x86/x64 | Builds pass; mocked NT and client tests pass under Wine | NT4/98 loader and real device tests |
+| MSVC x86/x64 | CMake profiles and C17 portability provided | VS2022 compilation and mock tests |
+| IOS helper | LE/DDB/fixups valid; no CRT imports; clean builds identical | VMM load/unload, IOS callbacks, controller transfer behavior |
+| Error paths | Simulated short replies, bad sense, timeout, ATA errors, unsupported fallback, separate devices | Real driver error behavior |
+| Benchmark | Single seed read for `-T`; successive `-t` reads; QPC failure and tick wrap tested | Real disk and memory performance |
+
+Run the non-destructive tests first:
+
+```bat
+windows_tests.exe
+win9x_tests.exe
+ios_tests.exe
+hdparm --verbose --list > devices.log 2>&1
+hdparm --verbose -I -g ios:0 > ios-identify.log 2>&1
+hdparm --verbose -T -t ios:0 > ios-timing.log 2>&1
+```
+
+Choose the actual `ios:index` from the list. Then repeat IDENTIFY with its
+SMARTVSD name, and read tests with an appropriate ASPI device when available.
+Test `--list` without the VxD as well as with it. Check both 512-byte and
+4096-byte emulated disks where available, >4 GiB offsets, empty/unsupported
+optical media, missing SMARTVSD/ASPI, and permission/driver failure logs.
+Do not infer throughput ratios: RAM copies and device reads measure different
+work. The automated tests never send commands to real disks.
+
+The reproducibility check uses two separate, initially empty build directories,
+builds `hdparm_vxd` in each, then runs `cmp` on their VXD files. The tested
+artifact SHA-256 is
+`10c908b96f1a605ecea1ce2e8798975ac482f2c22b0c83a5100c10787536c103`.
+The PE import check includes CRT imports and rejects additions to the reviewed
+Bookworm baseline. It is a regression check, not a substitute for running the
+binary with the actual NT4/Win98 versions of KERNEL32/MSVCRT.

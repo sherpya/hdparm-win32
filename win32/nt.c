@@ -3,6 +3,7 @@
 #include "../hdparm.h"
 #include "device.h"
 #include <ntddscsi.h>
+#include <ntddcdrm.h>
 extern int verbose;
 
 static int ctl(HANDLE h, DWORD code, void *in, DWORD insz, void *out, DWORD outsz, DWORD *got) {
@@ -16,7 +17,9 @@ static int geometry(struct win_device *d) {
     GET_LENGTH_INFORMATION length;
     DWORD got;
     memset(&g, 0, sizeof(g));
-    if (ctl(d->handle, IOCTL_DISK_GET_DRIVE_GEOMETRY, NULL, 0, &g, sizeof(g), &got))
+    if (ctl(d->handle,
+            (d->optical ? IOCTL_CDROM_GET_DRIVE_GEOMETRY : IOCTL_DISK_GET_DRIVE_GEOMETRY), NULL, 0,
+            &g, sizeof(g), &got))
         return -1;
     if (got < sizeof(g) || !g.BytesPerSector || (g.BytesPerSector & (g.BytesPerSector - 1)) ||
         g.BytesPerSector > 65536) {
@@ -99,7 +102,8 @@ int win_nt_read(struct win_device *d, void *buf, unsigned bytes, __u64 offset) {
     DWORD low, got;
     __u64 absolute;
     if (offset > d->size || bytes > d->size - offset || offset > 0x7fffffffffffffffULL - d->base ||
-        bytes % d->sector || offset % d->sector) {
+        bytes > 0x7fffffffffffffffULL - d->base - offset || bytes % d->sector ||
+        offset % d->sector) {
         errno = EINVAL;
         return -1;
     }
@@ -177,7 +181,7 @@ static int ata_ex(struct win_device *d, int rw, int dma, struct ata_tf *tf, void
         errno = EIO;
         goto done;
     } /* BSY, DF, DRQ, ERR */
-    if (bytes && (p->DataTransferLength != bytes ||
+    if (bytes && (p->DataBufferOffset != offset || p->DataTransferLength != bytes ||
                   (rw == SG_READ && (got < offset || got - offset < bytes)))) {
         errno = EIO;
         goto done;
@@ -330,7 +334,12 @@ int win_nt_scsi(struct win_device *d, const unsigned char *cdb, unsigned cdb_len
     if (*sense_len > p->SenseInfoLength)
         *sense_len = p->SenseInfoLength;
     memcpy(sense, (char *)p + sizeof(*p), *sense_len);
-    if (bytes && (p->DataTransferLength != bytes || (rw == SG_READ && got < offset + bytes))) {
+    if (win_scsi_unsupported(sense, *sense_len, *status)) {
+        rc = win_unsupported();
+        goto done;
+    }
+    if (bytes && (p->DataBufferOffset != offset || p->DataTransferLength != bytes ||
+                  (rw == SG_READ && got < offset + bytes))) {
         errno = EIO;
         goto done;
     }

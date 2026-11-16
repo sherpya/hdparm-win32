@@ -11,4 +11,5 @@ struct win_api win_api = {DeviceIoControl,
                           QueryPerformanceCounter,
                           QueryPerformanceFrequency,
                           GetTickCount,
-                          GetVersion};
+                          GetVersion,
+                          Sleep};

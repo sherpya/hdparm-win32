@@ -94,6 +94,7 @@ int win_ata(int fd, int rw, int dma, struct ata_tf *tf, void *data, unsigned byt
 int win_benchmark(int fd, int cached, __u64 offset);
 int win_list(void);
 int win_is_whole_disk(int fd);
+int win_identify_command(int fd);
 #ifndef HDPARM_WIN_INTERNAL
 #define open(...) _open(__VA_ARGS__)
 #define write _write

@@ -9,6 +9,8 @@ static unsigned calls, reads, ata_calls, sat_calls;
 static unsigned scenario;
 static __u64 seek_position;
 static LONGLONG clock_value;
+static unsigned clock_mode;
+static DWORD tick_value;
 static BOOL WINAPI fake_close(HANDLE h) {
     (void)h;
     return TRUE;
@@ -45,14 +47,18 @@ static BOOL WINAPI fake_read(HANDLE h, LPVOID p, DWORD n, LPDWORD got, LPOVERLAP
 }
 static BOOL WINAPI fake_counter(LARGE_INTEGER *v) {
     v->QuadPart = clock_value;
-    clock_value += 1000;
+    clock_value += clock_mode == 2 ? -1 : 1000;
     return TRUE;
 }
 static BOOL WINAPI fake_frequency(LARGE_INTEGER *v) {
     v->QuadPart = 1000;
-    return TRUE;
+    return clock_mode != 1;
 }
-static DWORD WINAPI fake_ticks(void) { return 100; }
+static DWORD WINAPI fake_ticks(void) {
+    DWORD t = tick_value;
+    tick_value += 1000;
+    return t;
+}
 static BOOL WINAPI fake_ioctl(HANDLE h, DWORD code, LPVOID in, DWORD insz, LPVOID out, DWORD outsz,
                               LPDWORD got, LPOVERLAPPED ov) {
     (void)h;
@@ -94,7 +100,7 @@ static BOOL WINAPI fake_ioctl(HANDLE h, DWORD code, LPVOID in, DWORD insz, LPVOI
         ATA_PASS_THROUGH_EX *p = in;
         unsigned char command = p->CurrentTaskFile[6];
         ata_calls++;
-        if (scenario == 1 || scenario == 8) {
+        if (scenario == 1 || scenario == 8 || scenario == 9) {
             SetLastError(ERROR_NOT_SUPPORTED);
             return FALSE;
         }
@@ -132,12 +138,31 @@ static BOOL WINAPI fake_ioctl(HANDLE h, DWORD code, LPVOID in, DWORD insz, LPVOI
         s[8] = 9;
         s[9] = scenario == 8 ? 30 : 12;
         s[21] = 0x50;
+        if (scenario == 9) {
+            s[1] = 5;
+            s[2] = 0x20;
+            s[7] = 0;
+            p->ScsiStatus = 2;
+            p->SenseInfoLength = 8;
+            p->DataTransferLength = 0;
+            *got = sizeof(*p) + 8;
+            return TRUE;
+        }
         p->ScsiStatus = 2;
         p->SenseInfoLength = 22;
         if (p->DataTransferLength)
             memset((char *)p + p->DataBufferOffset, 0x5a, p->DataTransferLength);
         *got = (DWORD)(p->DataTransferLength ? p->DataBufferOffset + p->DataTransferLength
                                              : sizeof(*p) + 22);
+        return TRUE;
+    }
+    if (code == 0x0004d028 && scenario == 9) {
+        unsigned char *p = out;
+        assert(insz == 524);
+        p[6] = 0x50;
+        p[0] = 0;
+        memset(p + 12, 0x36, 512);
+        *got = 524;
         return TRUE;
     }
     SetLastError(ERROR_NOT_SUPPORTED);
@@ -205,6 +230,11 @@ int main(void) {
         assert(ata_calls == 1 && sat_calls == 0);
         win_close(fd);
     }
+    scenario = 9;
+    fd = open_disk();
+    tf.command = ATA_OP_IDENTIFY;
+    assert(win_ata(fd, SG_READ, 0, &tf, buf, 512, 15) == 0 && buf[0] == 0x36);
+    win_close(fd);
     scenario = 8;
     fd = open_disk();
     ata_calls = sat_calls = 0;
@@ -237,6 +267,18 @@ int main(void) {
     reads = 0;
     clock_value = 0;
     assert(win_benchmark(fd, 0, 0) == 0 && reads == 3);
+    clock_mode = 1;
+    tick_value = 0xfffff800;
+    reads = 0;
+    assert(win_benchmark(fd, 0, 0) == 0 && reads == 3); /* wraps GetTickCount */
+    clock_mode = 2;
+    clock_value = 0;
+    reads = 0;
+    assert(win_benchmark(fd, 0, 0) == -1 && reads == 1); /* invalid QPC interval */
+    clock_mode = 0;
+    clock_value = 0;
+    scenario = 5;
+    assert(win_benchmark(fd, 0, 0) == -1); /* incomplete read cannot produce a rate */
     win_close(fd);
     VirtualFree(buf, 0, MEM_RELEASE);
     puts("Windows transport and benchmark tests passed (mock I/O).");

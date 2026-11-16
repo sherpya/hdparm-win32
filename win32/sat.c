@@ -2,6 +2,14 @@
 #define HDPARM_WIN_INTERNAL
 #include "device.h"
 extern int prefer_ata12;
+/* A target rejecting the pass-through opcode has not executed the ATA command. */
+int win_scsi_unsupported(const unsigned char *s, unsigned n, unsigned char status) {
+    if (status != 2 || n < 8 || 8u + s[7] > n)
+        return 0;
+    if ((s[0] & 0x7e) == 0x70)
+        return n >= 14 && s[7] >= 6 && (s[2] & 15) == 5 && s[12] == 0x20 && !s[13];
+    return (s[0] & 0x7e) == 0x72 && (s[1] & 15) == 5 && s[2] == 0x20 && !s[3];
+}
 int win_sat(struct win_device *d, int rw, int dma, struct ata_tf *tf, void *data, unsigned bytes,
             unsigned timeout) {
     unsigned char cdb[16] = {0}, sense[64] = {0}, status = 0;
@@ -37,12 +45,7 @@ int win_sat(struct win_device *d, int rw, int dma, struct ata_tf *tf, void *data
     }
     if (win_scsi(d, cdb, use12 ? 12 : 16, rw, data, bytes, timeout, sense, &slen, &status))
         return -1;
-    /* Only ILLEGAL REQUEST / invalid opcode means this transport cannot issue ATA. */
-    if (status == 2 && slen >= 14 && (sense[0] & 0x7f) == 0x70 && (sense[2] & 15) == 5 &&
-        sense[12] == 0x20 && sense[13] == 0)
-        return win_unsupported();
-    if (status == 2 && slen >= 8 && (sense[0] & 0x7e) == 0x72 && (sense[1] & 15) == 5 &&
-        sense[2] == 0x20 && sense[3] == 0)
+    if (win_scsi_unsupported(sense, slen, status))
         return win_unsupported();
     if (status != 2 || slen < 8 || (sense[0] & 0x7e) != 0x72) {
         errno = EIO;

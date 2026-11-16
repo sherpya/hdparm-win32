@@ -1085,11 +1085,19 @@ static void get_identify_data (int fd)
 	if (id)
 		return;
 	memset(args, 0, sizeof(args));
-	last_identify_op = ATA_OP_IDENTIFY;
+#ifdef _WIN32
+    last_identify_op = win_identify_command(fd);
+#else
+    last_identify_op = ATA_OP_IDENTIFY;
+#endif
 	args[0] = last_identify_op;
 	args[3] = 1;	/* sector count */
 	if (do_drive_cmd(fd, args, 0)) {
-		prefer_ata12 = 0;
+#ifdef _WIN32
+        if (verbose) perror("Windows IDENTIFY failed");
+        return;
+#else
+        prefer_ata12 = 0;
 		memset(args, 0, sizeof(args));
 		last_identify_op = ATA_OP_PIDENTIFY;
 		args[0] = last_identify_op;
@@ -1099,6 +1107,7 @@ static void get_identify_data (int fd)
 				perror(" HDIO_DRIVE_CMD(identify) failed");
 			return;
 		}
+#endif
 	}
 	/* byte-swap the little-endian IDENTIFY data to match byte-order on host CPU */
 	id = (void *)(args + 4);
@@ -1221,7 +1230,7 @@ static int abort_if_not_full_device (int fd, __u64 lba, const char *devname, con
 	int i, err, shortened = 0;
 	char *fdevname = strdup(devname);
 
-	#ifdef _WIN32
+#ifdef _WIN32
 	if (!win_is_whole_disk(fd)) {
 		fprintf(stderr, "%s: this command requires a physical disk, not a volume.\n", devname);
 		exit(EINVAL);
@@ -1972,7 +1981,7 @@ static void usage_help (int clue, int rc)
 	" --dco-identify    Read/dump device configuration identify data\n"
 	" --dco-restore     Reset device configuration back to factory defaults\n"
 	" --dco-setmax      Use DCO to set maximum addressable sectors\n"
-	#ifdef _WIN32
+#ifdef _WIN32
     " --list            List Windows device names and transports\n"
     " --direct          Device reads already use unbuffered I/O on Windows NT\n"
     "                   -T measures application RAM cached reads on Windows\n"
@@ -2055,7 +2064,7 @@ void process_dev (char *devname)
 	static long parm, multcount;
 
 	id = NULL;
-	#ifdef _WIN32
+#ifdef _WIN32
 	fd = win_open_device(devname, open_flags);
 #else
 	fd = open(devname, open_flags);
@@ -2688,9 +2697,16 @@ void process_dev (char *devname)
 	if (get_powermode) {
 		__u8 args[4] = {ATA_OP_CHECKPOWERMODE1,0,0,0};
 		const char *state = "unknown";
-		if (do_drive_cmd(fd, args, 0)
-		 && (args[0] = ATA_OP_CHECKPOWERMODE2) /* (single =) try again with 0x98 */
-		 && do_drive_cmd(fd, args, 0)) {
+        int rc = do_drive_cmd(fd, args, 0);
+#ifdef _WIN32
+        if (rc && errno == ENOSYS) {
+#else
+        if (rc) {
+#endif
+            args[0] = ATA_OP_CHECKPOWERMODE2;
+            rc = do_drive_cmd(fd, args, 0);
+        }
+        if (rc) {
 			err = errno;
 		} else {
 			switch (args[2]) {
@@ -2720,8 +2736,11 @@ void process_dev (char *devname)
 			perror(" HDIO_GET_IDENTITY failed");
 		}
 	}
-	if (do_IDentity) {
-		get_identify_data(fd);
+    if (do_IDentity) {
+        get_identify_data(fd);
+#ifdef _WIN32
+        if (!id) { err = errno; perror("IDENTIFY"); }
+#endif
 		if (id) {
 			if (do_IDentity == 2) {
 				dump_sectors(id, 1, 1, 512);
@@ -3290,7 +3309,7 @@ get_longarg (void)
 
 	while (*argp)
 		++argp;
-	#ifdef _WIN32
+#ifdef _WIN32
 	if (0 == strcasecmp(name, "list")) exit(win_list());
 #endif
 	if (0 == strcasecmp(name, "verbose")) {

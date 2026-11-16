@@ -1,6 +1,7 @@
 /* Device contexts and CRT file separation. SPDX-License-Identifier: BSD-2-Clause */
 #define HDPARM_WIN_INTERNAL
 #include "device.h"
+#include "aspi.h"
 #include "../hdparm.h"
 #include <conio.h>
 extern int verbose;
@@ -98,11 +99,9 @@ int win_open_device(const char *name, unsigned flags) {
     d = &devices[i];
     memset(d, 0, sizeof(*d));
     d->handle = d->read_handle = INVALID_HANDLE_VALUE;
-    if (device_name(name, d->name, &d->volume, &d->optical))
+    if (!win_is_9x() && device_name(name, d->name, &d->volume, &d->optical))
         return -1;
-    if (win_is_9x())
-        return win_unsupported();
-    if (win_nt_open(d, d->name)) {
+    if (win_is_9x() ? win_9x_open(d, name) : win_nt_open(d, d->name)) {
         int error = errno;
         if (d->handle != INVALID_HANDLE_VALUE)
             CloseHandle(d->handle);
@@ -139,7 +138,12 @@ int win_read(int fd, void *buf, unsigned bytes) {
     d = win_device(fd);
     if (!d)
         return -1;
-    result = win_nt_read(d, buf, bytes, d->position);
+    if (bytes > WIN_MAX_TRANSFER) {
+        errno = EINVAL;
+        return -1;
+    }
+    result =
+        d->kind ? win_9x_read(d, buf, bytes, d->position) : win_nt_read(d, buf, bytes, d->position);
     if (result > 0)
         d->position += (unsigned)result;
     return result;
@@ -179,6 +183,10 @@ int win_fstat(int fd, struct stat *st) {
     st->st_mode = _S_IFCHR;
     return 0;
 }
+int win_identify_command(int fd) {
+    struct win_device *d = win_device(fd);
+    return d && d->optical ? ATA_OP_PIDENTIFY : ATA_OP_IDENTIFY;
+}
 int win_is_whole_disk(int fd) {
     struct win_device *d = win_device(fd);
     return d && !d->volume && !d->optical;
@@ -190,6 +198,8 @@ int win_flush(int fd) {
     d = win_device(fd);
     if (!d)
         return -1;
+    if (d->kind)
+        return win_unsupported();
     if (!FlushFileBuffers(d->handle))
         return win_error("FlushFileBuffers", GetLastError());
     return 0;
@@ -205,11 +215,16 @@ int win_ata(int fd, int rw, int dma, struct ata_tf *tf, void *data, unsigned byt
     }
     if (!timeout)
         timeout = 15;
-    return win_nt_ata(d, rw, dma, tf, data, bytes, timeout);
+    return d->kind ? win_9x_ata(d, rw, dma, tf, data, bytes, timeout)
+                   : win_nt_ata(d, rw, dma, tf, data, bytes, timeout);
 }
 int win_scsi(struct win_device *d, const unsigned char *cdb, unsigned cdb_len, int rw, void *data,
              unsigned bytes, unsigned timeout, unsigned char *sense, unsigned *sense_len,
              unsigned char *status) {
+    if (d->kind == WIN_ASPI)
+        return win_aspi_scsi(d, cdb, cdb_len, rw, data, bytes, timeout, sense, sense_len, status);
+    if (d->kind)
+        return win_unsupported();
     return win_nt_scsi(d, cdb, cdb_len, rw, data, bytes, timeout, sense, sense_len, status);
 }
 int win_ioctl(int fd, unsigned code, uintptr_t arg) {
@@ -271,10 +286,8 @@ int get_dev_geometry(int fd, __u32 *c, __u32 *h, __u32 *s, __u64 *start, __u64 *
 int win_list(void) {
     unsigned i, count = 0;
     char path[64];
-    if (win_is_9x()) {
-        fprintf(stderr, "Win9x backend not available in this build\n");
-        return ENOSYS;
-    }
+    if (win_is_9x())
+        return win_9x_list();
     for (i = 0; i < 256; i++) {
         HANDLE h;
         snprintf(path, sizeof(path), "\\\\.\\PhysicalDrive%u", i);
@@ -297,6 +310,19 @@ int win_list(void) {
     }
     if (!count)
         fprintf(stderr, "No accessible physical disks found.\n");
+    {
+        DWORD drives = GetLogicalDrives();
+        for (i = 0; i < 26; i++)
+            if (drives & (1u << i)) {
+                char root[] = "A:\\";
+                UINT type;
+                root[0] = (char)('A' + i);
+                type = GetDriveTypeA(root);
+                if (type == DRIVE_FIXED || type == DRIVE_REMOVABLE)
+                    printf("%c:  NT volume (single extent/partition reads; checked on open)\n",
+                           'A' + i);
+            }
+    }
     return 0;
 }
 void *win_mmap(void *addr, size_t size, int prot, int flags, int fd, __s64 offset) {
