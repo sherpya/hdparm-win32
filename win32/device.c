@@ -227,6 +227,13 @@ int win_scsi(struct win_device *d, const unsigned char *cdb, unsigned cdb_len, i
         return win_unsupported();
     return win_nt_scsi(d, cdb, cdb_len, rw, data, bytes, timeout, sense, sense_len, status);
 }
+static void swap_ata_string(unsigned char *field, unsigned length) {
+    for (unsigned i = 0; i < length; i += 2) {
+        unsigned char first = field[i];
+        field[i] = field[i + 1];
+        field[i + 1] = first;
+    }
+}
 int win_ioctl(int fd, unsigned code, uintptr_t arg) {
     struct win_device *d = win_device(fd);
     void *p = (void *)arg;
@@ -251,12 +258,19 @@ int win_ioctl(int fd, unsigned code, uintptr_t arg) {
         return win_flush(fd);
     case HDIO_GET_IDENTITY: {
         struct ata_tf tf;
+        unsigned char *identity = p;
         if (!p)
             break;
         memset(&tf, 0, sizeof(tf));
         tf.command = d->optical ? ATA_OP_PIDENTIFY : ATA_OP_IDENTIFY;
         tf.lob.nsect = 1;
-        return win_ata(fd, SG_READ, SG_PIO, &tf, p, 512, 15);
+        if (win_ata(fd, SG_READ, SG_PIO, &tf, p, 512, 15))
+            return -1;
+        /* Linux's HDIO_GET_IDENTITY presents these fields as byte strings. */
+        swap_ata_string(identity + 10 * 2, 20); /* serial number */
+        swap_ata_string(identity + 23 * 2, 8);  /* firmware revision */
+        swap_ata_string(identity + 27 * 2, 40); /* model */
+        return 0;
     }
     case HDIO_DRIVE_CMD:
         if (!arg)

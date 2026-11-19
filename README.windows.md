@@ -40,7 +40,7 @@ Do not assume that a physical disk index is a BIOS number or an IDE position.
 | Operation | NT transport / limitation |
 | --- | --- |
 | ATA 28/48-bit, input/output, non-data | ATA_PASS_THROUGH_EX; driver dependent |
-| ATA over SCSI/USB | SAT12/16, requires valid ATA return descriptor |
+| ATA over SCSI/USB | SAT12/16; a full IDENTIFY reply can succeed without an ATA return descriptor |
 | Older IDE stack | IDE_PASS_THROUGH, 28-bit, at most 512-byte input, no output |
 | SMART interface | IDENTIFY only, no arbitrary ATA commands |
 | SCSI | SCSI_PASS_THROUGH, CDB up to 16 bytes |
@@ -50,10 +50,11 @@ Do not assume that a physical disk index is a BIOS number or an IDE position.
 | Linux driver settings, FIEMAP, sysfs, RAID detection, APT-specific transport | Unsupported on Windows |
 
 Commands need the appropriate device permissions (usually administrator).
-A method is retried through another transport only on an explicit unsupported
-result. Timeouts, short/malformed replies, ATA errors and ambiguous Windows
-errors stop the request. `--verbose` prints methods and original Windows error
-numbers. Capability failure caches belong to each open device and request class.
+A method is retried through another transport on an explicit unsupported
+result. A read-only IDENTIFY can also try the disk's SMART interface after a
+SAT I/O error. If SMART fails, hdparm reports the original I/O error.
+`--verbose` prints methods and original Windows error numbers.
+Capability failure caches belong to each open device and request class.
 ATA/SCSI commands on volume handles are rejected; choose the whole disk explicitly.
 On NT4 without extent queries the volume itself is read within partition bounds.
 

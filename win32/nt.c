@@ -260,6 +260,8 @@ int win_nt_ata(struct win_device *d, int rw, int dma, struct ata_tf *tf, void *d
                unsigned timeout) {
     unsigned cls = (tf->is_lba48 ? 3 : 0) + (bytes ? (rw == SG_WRITE ? 2 : 1) : 0), i;
     struct ata_tf original = *tf;
+    int identify = rw == SG_READ && !tf->is_lba48 && bytes == 512 &&
+                   (tf->command == ATA_OP_IDENTIFY || tf->command == ATA_OP_PIDENTIFY);
     if (d->volume)
         return win_unsupported();
     for (i = 0; i < 4; i++) {
@@ -268,9 +270,7 @@ int win_nt_ata(struct win_device *d, int rw, int dma, struct ata_tf *tf, void *d
             continue;
         if (i == 2 && (original.is_lba48 || rw == SG_WRITE || bytes > 512))
             continue;
-        if (i == 3 &&
-            (rw == SG_WRITE || original.is_lba48 || bytes != 512 ||
-             (original.command != ATA_OP_IDENTIFY && original.command != ATA_OP_PIDENTIFY)))
+        if (i == 3 && !identify)
             continue;
         *tf = original;
         if (verbose)
@@ -288,6 +288,17 @@ int win_nt_ata(struct win_device *d, int rw, int dma, struct ata_tf *tf, void *d
             rc = ata_legacy(d, rw, tf, data, bytes);
         else
             rc = ata_smart(d, tf, data, bytes);
+        /* The disk's SMART interface may expose IDENTIFY even if SAT fails. */
+        if (rc && i == 1 && errno == EIO && identify) {
+            struct ata_tf smart = original;
+            if (verbose)
+                fputs("Windows ATA method=SMART after SAT I/O error\n", stderr);
+            if (!ata_smart(d, &smart, data, bytes)) {
+                *tf = smart;
+                return 0;
+            }
+            errno = EIO;
+        }
         if (rc == 0 || errno != ENOSYS)
             return rc;
         d->unavailable[cls] |= 1u << i;
@@ -325,8 +336,9 @@ int win_nt_scsi(struct win_device *d, const unsigned char *cdb, unsigned cdb_len
         memcpy((char *)p + offset, data, bytes);
     if (ctl(d->handle, IOCTL_SCSI_PASS_THROUGH, p, size, p, size, &got))
         goto done;
-    if (got < sizeof(*p) || p->Length != sizeof(*p) || p->SenseInfoOffset != sizeof(*p) ||
-        p->SenseInfoLength > 64 || (p->SenseInfoLength && got < sizeof(*p) + p->SenseInfoLength)) {
+    if (got < sizeof(*p) || p->Length != sizeof(*p) || p->SenseInfoLength > 64 ||
+        (p->SenseInfoLength &&
+         (p->SenseInfoOffset != sizeof(*p) || got < sizeof(*p) + p->SenseInfoLength))) {
         errno = EIO;
         goto done;
     }

@@ -5,7 +5,7 @@
 #include <assert.h>
 #include <ntddscsi.h>
 int verbose = 0, prefer_ata12 = 0;
-static unsigned calls, reads, ata_calls, sat_calls;
+static unsigned calls, reads, ata_calls, sat_calls, smart_calls;
 static unsigned scenario;
 static __u64 seek_position;
 static LONGLONG clock_value;
@@ -100,7 +100,7 @@ static BOOL WINAPI fake_ioctl(HANDLE h, DWORD code, LPVOID in, DWORD insz, LPVOI
         ATA_PASS_THROUGH_EX *p = in;
         unsigned char command = p->CurrentTaskFile[6];
         ata_calls++;
-        if (scenario == 1 || scenario == 8 || scenario == 9) {
+        if (scenario == 1 || (scenario >= 8 && scenario <= 12)) {
             SetLastError(ERROR_NOT_SUPPORTED);
             return FALSE;
         }
@@ -131,6 +131,25 @@ static BOOL WINAPI fake_ioctl(HANDLE h, DWORD code, LPVOID in, DWORD insz, LPVOI
         SCSI_PASS_THROUGH *p = out;
         unsigned char *s = (unsigned char *)p + p->SenseInfoOffset;
         sat_calls++;
+        assert(p->Cdb[0] == 0x85);
+        if (p->Cdb[14] == ATA_OP_READ_PIO)
+            assert(p->Cdb[2] & 0x20);
+        if (scenario == 10) {
+            const unsigned char identify_cdb[16] = {
+                0x85, 0x08, 0x0e, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0x40, 0xec, 0
+            };
+            assert(!memcmp(p->Cdb, identify_cdb, sizeof(identify_cdb)));
+            p->ScsiStatus = 0;
+            p->SenseInfoLength = 0;
+            p->SenseInfoOffset = 0;
+            memset((char *)p + p->DataBufferOffset, 0x47, 512);
+            *got = (DWORD)p->DataBufferOffset + 512;
+            return TRUE;
+        }
+        if (scenario == 11 || scenario == 12) {
+            SetLastError(ERROR_IO_DEVICE);
+            return FALSE;
+        }
         memset(s, 0, 64);
         s[0] = 0x72;
         s[1] = 1;
@@ -154,6 +173,21 @@ static BOOL WINAPI fake_ioctl(HANDLE h, DWORD code, LPVOID in, DWORD insz, LPVOI
             memset((char *)p + p->DataBufferOffset, 0x5a, p->DataTransferLength);
         *got = (DWORD)(p->DataTransferLength ? p->DataBufferOffset + p->DataTransferLength
                                              : sizeof(*p) + 22);
+        return TRUE;
+    }
+    if (code == SMART_RCV_DRIVE_DATA && (scenario == 11 || scenario == 12)) {
+        SENDCMDINPARAMS *request = in;
+        SENDCMDOUTPARAMS *reply = out;
+        smart_calls++;
+        assert(request->irDriveRegs.bCommandReg == ATA_OP_IDENTIFY);
+        assert(request->cBufferSize == 512);
+        reply->cBufferSize = 512;
+        memset(reply->bBuffer, 0x23, 512);
+        memcpy(reply->bBuffer + 10 * 2, "2143", 4);
+        memcpy(reply->bBuffer + 23 * 2, "6MRC", 4);
+        memcpy(reply->bBuffer + 27 * 2, "TC42", 4);
+        *got = (DWORD)offsetof(SENDCMDOUTPARAMS, bBuffer) +
+               (scenario == 11 ? 512 : 511);
         return TRUE;
     }
     if (code == 0x0004d028 && scenario == 9) {
@@ -242,6 +276,36 @@ int main(void) {
     assert(win_ata(fd, SG_READ, 0, &tf, buf, 512, 15) == -1 && errno == EIO);
     assert(ata_calls == 1 && sat_calls == 1);
     win_close(fd);
+    scenario = 10;
+    fd = open_disk();
+    memset(&tf, 0, sizeof(tf));
+    tf.command = ATA_OP_IDENTIFY;
+    tf.dev = 0x40;
+    tf.lob.nsect = 1;
+    assert(win_ata(fd, SG_READ, 0, &tf, buf, 512, 15) == 0 && buf[0] == 0x47);
+    win_close(fd);
+    for (scenario = 11; scenario <= 12; scenario++) {
+        fd = open_disk();
+        smart_calls = 0;
+        tf.command = ATA_OP_IDENTIFY;
+        if (scenario == 11)
+            assert(win_ata(fd, SG_READ, 0, &tf, buf, 512, 15) == 0 && buf[0] == 0x23);
+        else
+            assert(win_ata(fd, SG_READ, 0, &tf, buf, 512, 15) == -1 && errno == EIO);
+        assert(smart_calls == 1);
+        if (scenario == 11) {
+            assert(!memcmp(buf + 27 * 2, "TC42", 4));
+            assert(win_ioctl(fd, HDIO_GET_IDENTITY, (uintptr_t)buf) == 0);
+            assert(!memcmp(buf + 10 * 2, "1234", 4));
+            assert(!memcmp(buf + 23 * 2, "M6CR", 4));
+            assert(!memcmp(buf + 27 * 2, "CT24", 4));
+            assert(smart_calls == 2);
+        }
+        tf.command = ATA_OP_READ_PIO;
+        assert(win_ata(fd, SG_READ, 0, &tf, buf, 512, 15) == -1 && errno == EIO);
+        assert(smart_calls == (scenario == 11 ? 2u : 1u));
+        win_close(fd);
+    }
     scenario = 5;
     fd = open_disk();
     assert(win_read(fd, buf, 512) == -1 && errno == EIO);

@@ -15,9 +15,11 @@ int win_sat(struct win_device *d, int rw, int dma, struct ata_tf *tf, void *data
     unsigned char cdb[16] = {0}, sense[64] = {0}, status = 0;
     unsigned slen = sizeof(sense), i, end;
     int use12 = prefer_ata12 && !tf->is_lba48 && tf->command != ATA_OP_PIDENTIFY;
+    int identify = rw == SG_READ && !tf->is_lba48 && bytes == 512 &&
+                   (tf->command == ATA_OP_IDENTIFY || tf->command == ATA_OP_PIDENTIFY);
     cdb[0] = use12 ? 0xa1 : 0x85;
     cdb[1] = (unsigned char)((!bytes ? 3 : dma ? 6 : rw == SG_WRITE ? 5 : 4) << 1);
-    cdb[2] = 0x20; /* CK_COND: registers required even on successful commands */
+    cdb[2] = identify ? 0 : 0x20; /* IDENTIFY can succeed with data alone. */
     if (bytes)
         cdb[2] |= 4 | 2 | (rw == SG_READ ? 8 : 0);
     if (use12) {
@@ -47,6 +49,11 @@ int win_sat(struct win_device *d, int rw, int dma, struct ata_tf *tf, void *data
         return -1;
     if (win_scsi_unsupported(sense, slen, status))
         return win_unsupported();
+    if (identify && status == 0) {
+        tf->status = 0;
+        tf->error = 0;
+        return 0;
+    }
     if (status != 2 || slen < 8 || (sense[0] & 0x7e) != 0x72) {
         errno = EIO;
         return -1;
