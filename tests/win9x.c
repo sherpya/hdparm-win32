@@ -5,6 +5,7 @@
 #include "win9x/protocol.h"
 #include <assert.h>
 int verbose = 0, prefer_ata12 = 0;
+enum { IOS_BATCH = 9, IOS_SHORT_BATCH };
 static unsigned mode, starts, polls, smart_calls, sleeps;
 static DWORD tick;
 static __u64 position;
@@ -13,6 +14,16 @@ static DWORD WINAPI version(void) { return 0x80000004u; }
 static DWORD WINAPI ticks(void) {
     tick += 1000;
     return tick;
+}
+static BOOL WINAPI benchmark_frequency(LARGE_INTEGER *v) {
+    v->QuadPart = 1000;
+    return TRUE;
+}
+static BOOL WINAPI benchmark_counter(LARGE_INTEGER *v) {
+    static LONGLONG now;
+    v->QuadPart = now;
+    now += 1600;
+    return TRUE;
 }
 static void WINAPI sleep_fake(DWORD ms) {
     (void)ms;
@@ -79,11 +90,27 @@ static BOOL WINAPI control(HANDLE h, DWORD c, LPVOID in, DWORD insz, LPVOID out,
             s->sector_size = 512;
             s->sectors_lo = 0x2000000;
             s->capabilities = HDIOS_CAP_READ | HDIOS_CAP_ATA28;
+            if (mode == IOS_BATCH || mode == IOS_SHORT_BATCH)
+                s->capabilities |= HDIOS_CAP_BENCH_READ;
             s->max_transfer = 65536;
             *got = sizeof(*s);
             return TRUE;
         }
         assert(r->generation == 7);
+        if (r->operation == HDIOS_BENCH_READ) {
+            struct hdios_bench_result *bench = (struct hdios_bench_result *)(s + 1);
+            assert((mode == IOS_BATCH || mode == IOS_SHORT_BATCH) && r->flags == HDIOS_IN);
+            assert(insz == sizeof(*r) && r->bytes == sizeof(*bench));
+            assert(outsz == sizeof(*s) + sizeof(*bench));
+            position = ((__u64)r->lba_hi << 32) | r->lba_lo;
+            assert(position == 0x800000u + starts * (HDIOS_BENCH_BYTES / 512));
+            starts++;
+            s->bytes = sizeof(*bench);
+            bench->bytes_read = HDIOS_BENCH_BYTES - (mode == IOS_SHORT_BATCH ? 512 : 0);
+            bench->reads = 32;
+            *got = outsz;
+            return TRUE;
+        }
         if (r->operation != HDIOS_POLL) {
             starts++;
             position = ((__u64)r->lba_hi << 32) | r->lba_lo;
@@ -182,6 +209,24 @@ int main(void) {
     starts = 0;
     tf.is_lba48 = 1;
     assert(win_ata(fd, SG_READ, 0, &tf, buf, 512, 1) == -1 && errno == ENOSYS && !starts);
+    win_api.frequency = benchmark_frequency;
+    win_api.counter = benchmark_counter;
+    assert(win_benchmark(fd, 0, 0) == 0 && starts == 64); /* older VxD, two 2 MiB blocks */
+    win_close(fd);
+    mode = IOS_BATCH;
+    fd = win_open_device("ios:0", 0);
+    assert(fd >= WIN_FD_BASE);
+    starts = 0;
+    assert(win_benchmark(fd, 1, 0) == 0 && starts == 32); /* seed -T with ordinary reads */
+    starts = polls = sleeps = 0;
+    assert(win_benchmark(fd, 0, 0x100000000ULL) == 0);
+    assert(starts == 2 && !polls && !sleeps);
+    assert(win_device(fd)->position == 0x100000000ULL + 2 * HDIOS_BENCH_BYTES);
+    mode = IOS_SHORT_BATCH;
+    starts = 0;
+    assert(win_benchmark(fd, 0, 0x100000000ULL) == -1 && errno == EIO);
+    assert(starts == 1 && win_device(fd)->position == 0x100000000ULL);
+    mode = 0;
     win_close(fd);
 #ifndef _WIN64
     aspi_api.send = aspi_send;

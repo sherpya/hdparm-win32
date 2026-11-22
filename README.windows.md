@@ -168,6 +168,10 @@ and DMA taskfiles are rejected. Sector reads use IOS's 64-bit starting sector;
 capacity and controller limits still govern what the installed port can read.
 `-t` requests IOS DONT_CACHE or ASPI READ commands. Neither promises to bypass
 the device's own cache. `-T` retains the same application RAM-copy semantics.
+With a batch-capable VxD, `-t` sends one request per 2 MiB. The VxD reads
+consecutive sectors into its own buffer using synchronous IOS reads within the
+controller transfer limit. The reported rate includes the time to complete
+each block. Older VxDs use the existing per-request read path.
 
 For ASPI, timeout reporting is followed by draining the outstanding request
 before returning failure: the ASPI manager must finish using its SRB and data.
@@ -184,6 +188,10 @@ On the physical machine IOS reported an apparent capacity of 8,422,686,720
 bytes. ATA IDENTIFY reported 351,651,888 sectors of 512 bytes. Sector reads
 are bounded by the capacity reported by IOS.
 
+On the same physical machine, the per-request benchmark measured 0.44 to
+0.60 MiB/s. A batched run with an instrumented build read 4 MiB in 3.16 s
+(1.26 MiB/s).
+
 | Check | Local result | Still required on Windows |
 | --- | --- | --- |
 | Linux regression | Build and `-V` pass | — |
@@ -191,7 +199,7 @@ are bounded by the capacity reported by IOS.
 | MSVC x86/x64 | CMake profiles and C17 portability provided | VS2022 compilation and mock tests |
 | IOS helper | LE/DDB/fixups valid; no CRT imports; clean builds identical | Unloading after pending I/O and additional controllers |
 | Error paths | Simulated short replies, bad sense, timeout, ATA errors, unsupported fallback, separate devices | Real driver error behavior |
-| Benchmark | Single seed read for `-T`; successive `-t` reads; QPC failure and tick wrap tested | Real disk and memory performance |
+| Benchmark | Single seed read for `-T`; successive `-t` reads; QPC failure and tick wrap tested | Batched throughput on additional Win9x controllers |
 
 Run the non-destructive tests first:
 
@@ -213,8 +221,8 @@ Do not infer throughput ratios: RAM copies and device reads measure different
 work. The automated tests never send commands to real disks.
 
 The reproducibility check uses two separate, initially empty build directories,
-builds `hdparm_vxd` in each, then runs `cmp` on their VXD files. The tested
-artifact SHA-256 is
+builds `hdparm_vxd` in each, then runs `cmp` on their VXD files. The SHA-256
+of the helper tested on physical Windows 98 at commit `56373ab` is
 `474261d18297eda1a46063f81e2d463460a14813a86ec94020204c443287b628`.
 The PE import check includes CRT imports and rejects additions to the reviewed
 Bookworm baseline. It is a regression check, not a substitute for running the

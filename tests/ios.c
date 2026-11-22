@@ -10,6 +10,8 @@ static struct ios_dcb disks[2];
 static unsigned allocations, frees, sends, pending, fail_pages, registered_count;
 static struct ios_ior *current;
 static int read_in_flight;
+static uint64_t expected_lba;
+static u32 batch_left, short_at, error_at;
 static void complete_read(void) {
     void (*callback)(u32) = (void (*)(u32))(uintptr_t)current->callback;
     assert(read_in_flight && callback && current->handle == ADDR(current));
@@ -76,13 +78,27 @@ void ios_deregister(u32 dvt) {
 void ios_send(struct ios_ior *p, struct ios_bdd *bdd) {
     sends++;
     current = p;
+    p->status = 0;
     assert(p->private_ios == 0xc0dec0de);
     assert(bdd == &disks[0].bdd || bdd == &disks[1].bdd);
     if (p->function == 0) {
         assert(p->flags & 0x40000000u); /* physical */
         assert(p->flags & 0x40);        /* IOS can double buffer reads */
-        assert(!(p->flags & 0x100));
-        read_in_flight = 1;
+        assert(p->flags & 4);           /* DONT_CACHE */
+        if (p->flags & 0x100) {
+            unsigned limit = disks[1].max_transfer;
+            unsigned bytes = batch_left < limit ? batch_left : limit;
+            assert(bdd == &disks[1].bdd && batch_left && !p->callback && !p->handle);
+            assert(p->start[0] == (u32)expected_lba && p->start[1] == expected_lba >> 32);
+            assert(p->count == bytes / bdd->sector_size);
+            expected_lba += p->count;
+            batch_left -= bytes;
+            if (sends == short_at)
+                --p->count;
+            if (sends == error_at)
+                p->status = 0x1e;
+        } else
+            read_in_flight = 1;
         memset(PTR(p->buffer), 0x5a, p->count * bdd->sector_size);
     } else {
         unsigned char *regs = PTR(p->usage[0]);
@@ -98,7 +114,6 @@ void ios_send(struct ios_ior *p, struct ios_bdd *bdd) {
         regs[0] = 0;
         regs[6] = 0x50;
     }
-    p->status = 0;
     if (read_in_flight && !pending)
         complete_read();
 }
@@ -122,6 +137,34 @@ static void request(u32 op, u32 dev, u32 bytes) {
     di.handle = 27;
     di.process = 35;
     *got = 0;
+}
+static void test_benchmark_block(void) {
+    struct hdios_bench_result *bench = (struct hdios_bench_result *)(s + 1);
+    unsigned before = sends;
+    disks[1].bdd.sectors_hi = 1;
+    disks[1].max_transfer = 60 * 1024; /* 34 full transfers and an 8 KiB tail */
+    request(HDIOS_BENCH_READ, 1, sizeof(*bench));
+    expected_lba = r->lba_lo = 0xfffffff8u;
+    batch_left = HDIOS_BENCH_BYTES;
+    assert(vxd_ioctl(&di) == 0 && !s->status && !s->token && s->bytes == sizeof(*bench));
+    assert(*got == sizeof(*s) + sizeof(*bench) && !batch_left && allocations == frees);
+    assert(bench->bytes_read == HDIOS_BENCH_BYTES && bench->reads == 35 && sends == before + 35);
+
+    expected_lba = r->lba_lo = 0;
+    batch_left = HDIOS_BENCH_BYTES;
+    short_at = sends + 2;
+    assert(vxd_ioctl(&di) == 0 && s->status == 31 && !s->bytes && sends == short_at);
+    assert(*got == sizeof(*s) && allocations == frees);
+    expected_lba = 0;
+    batch_left = HDIOS_BENCH_BYTES;
+    error_at = sends + 3;
+    assert(vxd_ioctl(&di) == 0 && s->ios_status == 0x1e && s->status && sends == error_at);
+    assert(!s->bytes && allocations == frees);
+
+    r->lba_hi = 1;
+    r->lba_lo = disks[1].bdd.sectors_lo - 511; /* one 4K sector short */
+    assert(vxd_ioctl(&di) == 87 && sends == error_at);
+    disks[1].bdd.sectors_hi = 0;
 }
 int main(void) {
     unsigned n, token, before;
@@ -205,6 +248,7 @@ int main(void) {
     request(HDIOS_READ, 0, 512);
     di.out_size = sizeof(*s);
     assert(vxd_ioctl(&di) == 87);
+    test_benchmark_block();
     request(HDIOS_ENUM, 0, 0);
     fail_pages = 1;
     assert(vxd_ioctl(&di) == 998);

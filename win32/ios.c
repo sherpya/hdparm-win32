@@ -69,7 +69,7 @@ static int exchange(struct win_device *d, struct hdios_request *r, void *data,
             break;
         }
         if (s->status != HDIOS_PENDING) {
-            if (verbose)
+            if (verbose && (s->status || operation != HDIOS_BENCH_READ))
                 fprintf(stderr, "IOS status=%lu native=%lu bytes=%lu token=%lu\n",
                         (unsigned long)s->status, (unsigned long)s->ios_status,
                         (unsigned long)s->bytes, (unsigned long)s->token);
@@ -88,7 +88,7 @@ static int exchange(struct win_device *d, struct hdios_request *r, void *data,
             rc = 0;
             break;
         }
-        if (!s->token || operation == HDIOS_ENUM) {
+        if (!s->token || operation == HDIOS_ENUM || operation == HDIOS_BENCH_READ) {
             errno = EIO;
             break;
         }
@@ -164,6 +164,25 @@ int win_ios_read(struct win_device *d, void *buf, unsigned bytes, __u64 offset) 
         done += r.bytes;
     }
     return (int)done;
+}
+int win_ios_benchmark_block(struct win_device *d) {
+    struct hdios_request r;
+    struct hdios_bench_result bench;
+    __u64 lba = d->position / d->sector;
+    request_init(&r, HDIOS_BENCH_READ, d);
+    r.flags = HDIOS_IN;
+    r.bytes = sizeof(bench);
+    r.lba_lo = (uint32_t)lba;
+    r.lba_hi = (uint32_t)(lba >> 32);
+    if (exchange(d, &r, &bench, NULL))
+        return -1;
+    if (bench.bytes_read != HDIOS_BENCH_BYTES ||
+        bench.reads != (HDIOS_BENCH_BYTES + d->max_transfer - 1) / d->max_transfer) {
+        errno = EIO;
+        return -1;
+    }
+    d->position += bench.bytes_read;
+    return (int)bench.bytes_read;
 }
 int win_ios_ata(struct win_device *d, int rw, int dma, struct ata_tf *tf, void *data,
                 unsigned bytes, unsigned timeout) {

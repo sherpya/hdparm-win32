@@ -123,7 +123,7 @@ static void describe(struct ios_dcb *d, struct hdios_reply *s) {
     s->type = d->type;
     s->bus = d->bus;
     s->unit = d->unit;
-    s->capabilities = HDIOS_CAP_READ;
+    s->capabilities = HDIOS_CAP_READ | HDIOS_CAP_BENCH_READ;
     /* Only ESDI/IDE disk transports. No SCSI/BIOS/ASPI index inference. */
     if (d->bus == 0 && d->type == 0 && !(d->flags & 0x2000) && s->sector_size == 512 &&
         (!d->actual_sector_size || d->actual_sector_size == 512))
@@ -172,7 +172,8 @@ static int extended_command(u8 cmd) {
         return 0;
     }
 }
-static int start(const struct hdios_request *r, const void *payload, struct dioc *di) {
+static int start(const struct hdios_request *r, const void *payload, struct dioc *di,
+                 int sync_read) {
     struct ios_alloc p;
     struct ios_dcb *d = devices[r->device];
     struct ios_iop *iop;
@@ -231,8 +232,13 @@ static int start(const struct hdios_request *r, const void *payload, struct dioc
         ior->count = r->bytes / result.sector_size;
         ior->flags |= IORF_PHYS_CMD | IORF_DONT_CACHE | IORF_BYPASS_VOLTRK |
                       IORF_DOUBLE_BUFFER | IORF_DATA_IN;
-        ior->callback = ADDR(read_completed);
-        ior->handle = ADDR(ior);
+        if (sync_read) {
+            ior->flags |= IORF_SYNC_COMMAND;
+            ior->callback = ior->handle = 0;
+        } else {
+            ior->callback = ADDR(read_completed);
+            ior->handle = ADDR(ior);
+        }
     } else {
         ior->function = 0x2b;
         /* ESDI_506 takes a sector count, including for IDENTIFY (one sector).
@@ -256,7 +262,7 @@ static int start(const struct hdios_request *r, const void *payload, struct dioc
     result.token = token;
     ios_completed = 0;
     ios_send(ior, &d->bdd);
-    if (r->operation == HDIOS_ATA28)
+    if (sync_read || r->operation == HDIOS_ATA28)
         ios_completed = 1;
     return 0;
 }
@@ -272,6 +278,40 @@ static void complete(void) {
     if (!result.status && ior->count != active.bytes / result.sector_size)
         result.status = 31;
     result.bytes = (!result.status && active.flags == HDIOS_IN) ? active.bytes : 0;
+}
+static u32 benchmark_block(const struct hdios_request *r, struct dioc *di) {
+    struct hdios_request read = *r;
+    struct hdios_bench_result bench = {0};
+    uint64_t lba = ((uint64_t)r->lba_hi << 32) | r->lba_lo;
+    uint64_t capacity = ((uint64_t)result.sectors_hi << 32) | result.sectors_lo;
+    u32 sector = result.sector_size, limit = result.max_transfer;
+    if (r->flags != HDIOS_IN || r->bytes != sizeof(bench) || r->token ||
+        sector < 512 || sector > HDIOS_MAX_DATA || (sector & (sector - 1)) || !limit ||
+        lba > capacity || HDIOS_BENCH_BYTES / sector > capacity - lba)
+        return 87;
+    read.operation = HDIOS_READ;
+    while (bench.bytes_read < HDIOS_BENCH_BYTES) {
+        u32 error, remaining = HDIOS_BENCH_BYTES - bench.bytes_read;
+        read.bytes = remaining < limit ? remaining : limit;
+        read.lba_lo = (u32)lba;
+        read.lba_hi = (u32)(lba >> 32);
+        error = start(&read, 0, di, 1);
+        if (error)
+            return error;
+        complete();
+        release();
+        result.token = 0;
+        if (generation != r->generation)
+            return 21;
+        if (result.status)
+            return 0; /* deliver the IOS error in the reply */
+        bench.reads++;
+        bench.bytes_read += result.bytes;
+        lba += result.bytes / sector;
+    }
+    copy(data_buffer, &bench, sizeof(bench));
+    result.bytes = sizeof(bench);
+    return 0;
 }
 static u32 dispatch(struct dioc *di, const struct hdios_request *r, const void *payload, void *out,
                     u32 *returned) {
@@ -310,7 +350,11 @@ static u32 dispatch(struct dioc *di, const struct hdios_request *r, const void *
             goto done;
         }
         describe(devices[r->device], &result);
-        if (r->operation != HDIOS_ENUM && (error = start(r, payload, di)))
+        if (r->operation == HDIOS_BENCH_READ)
+            error = benchmark_block(r, di);
+        else if (r->operation != HDIOS_ENUM)
+            error = start(r, payload, di, 0);
+        if (error)
             goto done;
     }
     reply = result;
@@ -388,7 +432,7 @@ u32 vxd_ioctl(struct dioc *di) {
     *returned = 0;
     copy(&r, input, sizeof(r));
     if (r.magic != HDIOS_MAGIC || r.version != HDIOS_VERSION || r.size != sizeof(r) ||
-        r.bytes > HDIOS_MAX_DATA || r.operation < HDIOS_ENUM || r.operation > HDIOS_POLL ||
+        r.bytes > HDIOS_MAX_DATA || r.operation < HDIOS_ENUM || r.operation > HDIOS_BENCH_READ ||
         r.flags > HDIOS_OUT || r.reserved[0] || r.reserved[1])
         goto done;
     if (di->in_size !=

@@ -53,5 +53,6 @@ int win_ios_open(struct win_device *d);
 int win_ios_ata(struct win_device *d, int rw, int dma, struct ata_tf *tf, void *data,
                 unsigned bytes, unsigned timeout);
 int win_ios_read(struct win_device *d, void *buf, unsigned bytes, __u64 offset);
+int win_ios_benchmark_block(struct win_device *d);
 int win_ios_list(void);
 #endif

@@ -10,12 +10,18 @@
 #define HDIOS_READ 2u
 #define HDIOS_ATA28 3u
 #define HDIOS_POLL 4u
+#define HDIOS_BENCH_READ 5u /* from lba, read HDIOS_BENCH_BYTES and return only the counters */
+#define HDIOS_BENCH_BYTES (2u * 1024u * 1024u)
 #define HDIOS_IN 1u
 #define HDIOS_OUT 2u
 #define HDIOS_CAP_READ 1u
 #define HDIOS_CAP_ATA28 2u /* transport available; individual commands depend on port driver */
+#define HDIOS_CAP_BENCH_READ 4u
 #define HDIOS_PENDING 997u
 #pragma pack(push, 4)
+struct hdios_bench_result {
+    uint32_t bytes_read, reads, reserved;
+};
 struct hdios_request {
     uint32_t magic, version, size, operation;
     uint32_t device, generation, token, flags;

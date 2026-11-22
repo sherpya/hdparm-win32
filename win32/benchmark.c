@@ -2,7 +2,7 @@
  */
 #define HDPARM_WIN_INTERNAL
 #include "device.h"
-#define BLOCK (2u * 1024u * 1024u)
+#include "../win9x/protocol.h"
 struct timer {
     LARGE_INTEGER frequency, start;
     DWORD tick, last;
@@ -34,20 +34,23 @@ int win_benchmark(int fd, int cached, __u64 offset) {
     unsigned char *buf = NULL, *source = NULL;
     __u64 total = 0;
     double elapsed = 0;
-    unsigned bytes = BLOCK;
+    unsigned bytes = HDIOS_BENCH_BYTES;
     volatile unsigned checksum = 0;
     unsigned i;
-    int rc = -1;
+    int rc = -1, batch;
     if (!d)
         return -1;
     if (offset > d->size || bytes > d->size - offset || offset % d->sector) {
         errno = EINVAL;
         return -1;
     }
-    buf = VirtualAlloc(NULL, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    if (!buf) {
-        errno = ENOMEM;
-        goto done;
+    batch = !cached && d->kind == WIN_IOS && (d->capabilities & HDIOS_CAP_BENCH_READ);
+    if (!batch) {
+        buf = VirtualAlloc(NULL, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (!buf) {
+            errno = ENOMEM;
+            goto done;
+        }
     }
     if (cached) {
         source = VirtualAlloc(NULL, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
@@ -67,9 +70,11 @@ int win_benchmark(int fd, int cached, __u64 offset) {
             for (i = 0; i < bytes; i += 512)
                 checksum += buf[i];
         } else {
+            int n;
             if (bytes > d->size - d->position)
                 break;
-            if (win_read(fd, buf, bytes) != (int)bytes)
+            n = batch ? win_ios_benchmark_block(d) : win_read(fd, buf, bytes);
+            if (n != (int)bytes)
                 goto done;
         }
         total += bytes;
@@ -84,7 +89,8 @@ int win_benchmark(int fd, int cached, __u64 offset) {
         goto done;
     }
     printf(" Timing %s%s: %.0f MiB in %.2f seconds = %.2f MiB/sec\n",
-           cached ? "application RAM cached reads" : "disk reads via ", cached ? "" : d->transport,
+           cached ? "application RAM cached reads" : "disk reads via ",
+           cached ? "" : batch ? "Win9x IOS (VxD batch, DONT_CACHE)" : d->transport,
            (double)total / 1048576.0, elapsed, (double)total / 1048576.0 / elapsed);
     rc = 0;
 done:
