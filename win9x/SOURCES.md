@@ -14,6 +14,11 @@ Driver logic is new. Reference documentation:
 
 - Microsoft Q196550, “Access IDE Controller Registers Using IDE Passthrough”
   ([archived article](https://www.betaarchive.com/wiki/index.php/Microsoft_KB_Archive/196550)).
+- The Windows 98 SE retail SMARTVSD client submits IDE passthrough with a
+  pointer to seven taskfile registers, a synchronous IOR, and a count of one
+  for a 512-byte IDENTIFY. ESDI_506 scales that count by the sector size.
+  IOS removes the request-handle argument after invoking asynchronous IOR
+  callbacks. These details were checked against the English SE CD binaries.
 - Microsoft Windows 98 DDK `src/block/fsd` (IOS allocation and SendCommand),
   `src/block/vsd/helpvsd` (IOP allocation), `src/base/asyncw32` (buffer locking).
 - [smartmontools RELEASE_5_40 os_win32.cpp](https://github.com/smartmontools/smartmontools/blob/RELEASE_5_40/smartmontools/os_win32.cpp)

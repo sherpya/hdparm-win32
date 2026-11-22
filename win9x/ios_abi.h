@@ -106,7 +106,6 @@ ABI_ASSERT(ilb, sizeof(struct ios_ilb) == 52);
 void ios_register(struct ios_drp *);
 void ios_deregister(u32 dvt);
 void ios_send(struct ios_ior *, struct ios_bdd *);
-void ios_callback(void);
 u32 page_check(u32 page, u32 count, u32 flags);
 u32 page_lock(u32 page, u32 count, u32 flags);
 u32 page_unlock(u32 page, u32 count, u32 flags);
@@ -115,5 +114,4 @@ int vxd_init(void);
 int vxd_exit(void);
 u32 vxd_ioctl(struct dioc *);
 void vxd_event(void *);
-extern volatile u32 ios_completed;
 #endif

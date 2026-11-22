@@ -3,7 +3,7 @@
 bits 32
 section .text
     times 16 db 0cch
-extern _vxd_init, _vxd_exit, _vxd_ioctl, _ios_completed
+extern _vxd_init, _vxd_exit, _vxd_ioctl
 
 global _ControlProc
 _ControlProc:
@@ -81,17 +81,15 @@ _ios_send:
     mov esi, [esp+16]               ; IOS allocated IOR
     mov edi, [esp+20]               ; BDD of physical DCB
     mov ebx, edi                    ; also required by IDE passthrough
+    push ebp
     int 20h
     dd 00100004h                    ; IOS_SendCommand
+    cld
+    pop ebp
     pop ebx
     pop edi
     pop esi
     ret
-
-global _ios_callback
-_ios_callback:
-    mov dword [_ios_completed], 1
-    ret 4                           ; IOS pushes IOR_req_req_handle
 
 ; C wrappers for VMM stack-based services. Preserve their argument layout.
 %macro cservice3 2

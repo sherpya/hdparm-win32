@@ -2,19 +2,32 @@
 #include "ios_abi.h"
 #include "protocol.h"
 #define MAX_DEVICES 256u
-#define IOR_FLAGS (0x40000000u | 0x400u | 0x40u | 0x8u | 0x4u | 1u)
+#define IORF_HIGH_PRIORITY 0x1u
+#define IORF_DONT_CACHE 0x4u
+#define IORF_BYPASS_VOLTRK 0x8u
+#define IORF_DOUBLE_BUFFER 0x40u
+#define IORF_SYNC_COMMAND 0x100u
+#define IORF_VERSION_002 0x400u
+#define IORF_DATA_IN 0x200000u
+#define IORF_DATA_OUT 0x400000u
+#define IORF_PHYS_CMD 0x40000000u
 static struct ios_ilb ilb;
 static struct ios_drp drp;
 static struct ios_dcb *devices[MAX_DEVICES];
 static u32 device_count, snapshot, generation = 1, registered;
 static volatile u32 gate;
-volatile u32 ios_completed;
+static volatile u32 ios_completed;
 static u32 allocation, owner, process, token, next_token, orphan;
 static struct ios_ior *ior;
 static struct hdios_request active;
 static struct hdios_reply result;
 static u8 data_buffer[HDIOS_MAX_DATA];
 static u8 taskfile[8];
+/* IOS pushes IOR_req_req_handle and pops it after this cdecl callback returns. */
+static void read_completed(u32 handle) {
+    (void)handle;
+    ios_completed = 1;
+}
 static void zero(void *p, u32 n) {
     u8 *q = p;
     while (n--)
@@ -112,7 +125,8 @@ static void describe(struct ios_dcb *d, struct hdios_reply *s) {
     s->unit = d->unit;
     s->capabilities = HDIOS_CAP_READ;
     /* Only ESDI/IDE disk transports. No SCSI/BIOS/ASPI index inference. */
-    if (d->bus == 0 && d->type == 0 && !(d->flags & 0x2000))
+    if (d->bus == 0 && d->type == 0 && !(d->flags & 0x2000) && s->sector_size == 512 &&
+        (!d->actual_sector_size || d->actual_sector_size == 512))
         s->capabilities |= HDIOS_CAP_ATA28;
     if (!limit || limit > HDIOS_MAX_DATA)
         limit = HDIOS_MAX_DATA;
@@ -203,11 +217,9 @@ static int start(const struct hdios_request *r, const void *payload, struct dioc
     ior->volume = 0;
     ior->num_sg = 0;
     iop->physical_dcb = iop->original_dcb = ADDR(d);
-    ior->flags = IOR_FLAGS;
+    ior->flags = IORF_HIGH_PRIORITY | IORF_VERSION_002;
     ior->unit = d->unit;
     ior->sg = ADDR(ior + 1);
-    ior->callback = ADDR(ios_callback);
-    ior->handle = ADDR(ior);
     ior->buffer = r->bytes ? ADDR(data_buffer) : 0;
     zero(data_buffer, r->bytes);
     if (r->flags == HDIOS_OUT)
@@ -217,16 +229,21 @@ static int start(const struct hdios_request *r, const void *payload, struct dioc
         ior->start[0] = r->lba_lo;
         ior->start[1] = r->lba_hi;
         ior->count = r->bytes / result.sector_size;
-        ior->flags |= 0x200000;
+        ior->flags |= IORF_PHYS_CMD | IORF_DONT_CACHE | IORF_BYPASS_VOLTRK |
+                      IORF_DOUBLE_BUFFER | IORF_DATA_IN;
+        ior->callback = ADDR(read_completed);
+        ior->handle = ADDR(ior);
     } else {
         ior->function = 0x2b;
-        ior->count = r->bytes;
-        /* IDE passthrough counts bytes. IOS must not reinterpret them as sectors. */
-        ior->flags |= 0x200;
+        /* ESDI_506 takes a sector count, including for IDENTIFY (one sector).
+         * SMARTVSD submits this request synchronously, with a linear data buffer. */
+        ior->count = r->bytes / 512;
+        ior->flags |= IORF_SYNC_COMMAND;
+        ior->callback = ior->handle = 0;
         if (r->flags)
-            ior->flags |= r->flags == HDIOS_IN ? 0x200000 : 0x400000;
+            ior->flags |= r->flags == HDIOS_IN ? IORF_DATA_IN : IORF_DATA_OUT;
         copy(taskfile, r->regs, 8);
-        taskfile[5] = (u8)((taskfile[5] & 0xef) | ((d->unit_on_controller & 1) << 4));
+        taskfile[5] = (u8)(0xa0 | (taskfile[5] & 0x4f) | ((d->unit_on_controller & 1) << 4));
         ior->usage[0] = ADDR(taskfile);
     }
     active = *r;
@@ -239,6 +256,8 @@ static int start(const struct hdios_request *r, const void *payload, struct dioc
     result.token = token;
     ios_completed = 0;
     ios_send(ior, &d->bdd);
+    if (r->operation == HDIOS_ATA28)
+        ios_completed = 1;
     return 0;
 }
 static void complete(void) {
@@ -250,9 +269,7 @@ static void complete(void) {
             result.status = 31;
     }
     /* IOS completion is all-or-error, unlike Win32's byte-counted reads. */
-    if (!result.status &&
-        ior->count !=
-            (active.operation == HDIOS_READ ? active.bytes / result.sector_size : active.bytes))
+    if (!result.status && ior->count != active.bytes / result.sector_size)
         result.status = 31;
     result.bytes = (!result.status && active.flags == HDIOS_IN) ? active.bytes : 0;
 }
@@ -314,7 +331,9 @@ static u32 dispatch(struct dioc *di, const struct hdios_request *r, const void *
     if (reply.bytes)
         copy((u8 *)out + sizeof(reply), data_buffer, reply.bytes);
     *returned = sizeof(reply) + reply.bytes;
-    if (allocation && ios_completed)
+    /* An interrupt can complete the I/O after we prepared a pending reply.
+     * Keep its result and buffer for the poll that consumes the token. */
+    if (allocation && reply.status != HDIOS_PENDING)
         release();
 done:
     gate = 0;

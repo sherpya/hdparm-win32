@@ -9,7 +9,13 @@
 static struct ios_dcb disks[2];
 static unsigned allocations, frees, sends, pending, fail_pages, registered_count;
 static struct ios_ior *current;
-void ios_callback(void) { ios_completed = 1; }
+static int read_in_flight;
+static void complete_read(void) {
+    void (*callback)(u32) = (void (*)(u32))(uintptr_t)current->callback;
+    assert(read_in_flight && callback && current->handle == ADDR(current));
+    read_in_flight = 0;
+    callback(current->handle);
+}
 u32 gate_claim(volatile u32 *p) {
     u32 old = *p;
     *p = 1;
@@ -49,7 +55,7 @@ static void service(void *packet) {
         allocations++;
     } else if (fn == 4) {
         struct ios_free *p = packet;
-        assert(!current || ios_completed);
+        assert(!read_in_flight);
         free(PTR(p->pointer));
         frees++;
         current = NULL;
@@ -72,20 +78,29 @@ void ios_send(struct ios_ior *p, struct ios_bdd *bdd) {
     current = p;
     assert(p->private_ios == 0xc0dec0de);
     assert(bdd == &disks[0].bdd || bdd == &disks[1].bdd);
-    assert(p->flags & 0x40000000u); /* physical */
-    assert(p->flags & 0x40);        /* IOS owns any necessary DMA double buffer */
     if (p->function == 0) {
+        assert(p->flags & 0x40000000u); /* physical */
+        assert(p->flags & 0x40);        /* IOS can double buffer reads */
+        assert(!(p->flags & 0x100));
+        read_in_flight = 1;
         memset(PTR(p->buffer), 0x5a, p->count * bdd->sector_size);
     } else {
         unsigned char *regs = PTR(p->usage[0]);
-        assert(p->function == 0x2b && regs[6] == 0xec && p->count == 512);
-        memset(PTR(p->buffer), 0xa5, p->count);
+        assert(p->function == 0x2b && !p->callback && !p->handle);
+        assert(regs[5] == 0xa0);
+        if (regs[6] == 0xec) {
+            /* The stock SMARTVSD request for a 512-byte IDENTIFY reply. */
+            assert(p->flags == 0x200501 && p->count == 1);
+            memset(PTR(p->buffer), 0xa5, p->count * 512);
+        } else {
+            assert(regs[6] == 0xe5 && p->flags == 0x501 && !p->count && !p->buffer);
+        }
         regs[0] = 0;
         regs[6] = 0x50;
     }
     p->status = 0;
-    if (!pending)
-        ios_callback();
+    if (read_in_flight && !pending)
+        complete_read();
 }
 static struct dioc di;
 static struct hdios_request *r;
@@ -150,6 +165,12 @@ int main(void) {
     assert(vxd_ioctl(&di) == 50);
     r->regs[6] = 0xec;
     assert(vxd_ioctl(&di) == 0 && s->regs[6] == 0x50 && *((u8 *)(s + 1)) == 0xa5);
+    request(HDIOS_ATA28, 0, 0);
+    r->regs[6] = 0xe5;
+    assert(vxd_ioctl(&di) == 0 && !s->status && !s->bytes);
+    request(HDIOS_ATA28, 1, 512);
+    r->regs[6] = 0xec;
+    assert(vxd_ioctl(&di) == 50); /* no ESDI_506 data transfers on a 4 KiB disk */
     request(HDIOS_READ, 0, 512);
     pending = 1;
     assert(vxd_ioctl(&di) == 0 && s->status == HDIOS_PENDING && !s->bytes);
@@ -163,7 +184,7 @@ int main(void) {
     assert(vxd_ioctl(&di) == 87);
     di.handle--;
     current->status = 0x1e;
-    ios_callback();
+    complete_read();
     assert(vxd_ioctl(&di) == 0 && s->status == 31 && !s->bytes && s->ios_status == 0x1e);
     assert(allocations == frees);
     request(HDIOS_READ, 0, 512);
@@ -171,7 +192,7 @@ int main(void) {
     di.code = 0xffffffffu;
     assert(vxd_ioctl(&di) == 0); /* close while pending */
     assert(allocations == frees + 1 && vxd_exit() == 1);
-    ios_callback();
+    complete_read();
     pending = 0;
     request(HDIOS_ENUM, 0, 0);
     assert(vxd_ioctl(&di) == 0 && allocations == frees);

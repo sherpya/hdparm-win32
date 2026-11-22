@@ -160,8 +160,10 @@ client closes or times out. Completed orphan requests are reclaimed on a later
 call or unload. The protocol is versioned, uses fixed-size fields and no user
 buffer pointers, and serializes outstanding IOS requests.
 
-The IOS ATA transport advertises **28-bit only**, with PIO or non-data commands,
-up to the controller's transfer limit (at most 64 KiB). Extended ATA commands
+The IOS ATA transport advertises **28-bit only** on IDE disks with 512-byte
+sectors. It submits PIO and non-data commands synchronously, up to the
+controller's transfer limit (at most 64 KiB). IOS and the port driver govern
+how long a synchronous call can block. Extended ATA commands
 and DMA taskfiles are rejected. Sector reads use IOS's 64-bit starting sector;
 capacity and controller limits still govern what the installed port can read.
 `-t` requests IOS DONT_CACHE or ASPI READ commands. Neither promises to bypass
@@ -174,16 +176,20 @@ replay or forced release of its buffers occurs.
 
 ### Verification status and Win9x checklist
 
-HDPARM.VXD is **experimental until tested in the real Win9x IOS stack**. The
-local checks validate the build, binary format and logic with mocked services;
-they do not establish controller compatibility or successful VMM loading.
+HDPARM.VXD is experimental. A Windows 98 test with ESDI_506 confirmed dynamic
+loading, enumeration and geometry. The original helper crashed on IDENTIFY.
+With the corrected helper, IDENTIFY and both benchmarks completed on Windows
+98 in VirtualBox and on a physical Intel SSDSC2CW180A3 through ESDI_506.
+On the physical machine IOS reported an apparent capacity of 8,422,686,720
+bytes. ATA IDENTIFY reported 351,651,888 sectors of 512 bytes. Sector reads
+are bounded by the capacity reported by IOS.
 
 | Check | Local result | Still required on Windows |
 | --- | --- | --- |
 | Linux regression | Build and `-V` pass | — |
 | MinGW x86/x64 | Builds pass; mocked NT and client tests pass under Wine | NT4/98 loader and real device tests |
 | MSVC x86/x64 | CMake profiles and C17 portability provided | VS2022 compilation and mock tests |
-| IOS helper | LE/DDB/fixups valid; no CRT imports; clean builds identical | VMM load/unload, IOS callbacks, controller transfer behavior |
+| IOS helper | LE/DDB/fixups valid; no CRT imports; clean builds identical | Unloading after pending I/O and additional controllers |
 | Error paths | Simulated short replies, bad sense, timeout, ATA errors, unsupported fallback, separate devices | Real driver error behavior |
 | Benchmark | Single seed read for `-T`; successive `-t` reads; QPC failure and tick wrap tested | Real disk and memory performance |
 
@@ -209,7 +215,7 @@ work. The automated tests never send commands to real disks.
 The reproducibility check uses two separate, initially empty build directories,
 builds `hdparm_vxd` in each, then runs `cmp` on their VXD files. The tested
 artifact SHA-256 is
-`10c908b96f1a605ecea1ce2e8798975ac482f2c22b0c83a5100c10787536c103`.
+`474261d18297eda1a46063f81e2d463460a14813a86ec94020204c443287b628`.
 The PE import check includes CRT imports and rejects additions to the reviewed
 Bookworm baseline. It is a regression check, not a substitute for running the
 binary with the actual NT4/Win98 versions of KERNEL32/MSVCRT.
